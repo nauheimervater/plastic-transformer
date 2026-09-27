@@ -313,7 +313,7 @@ def build_pdf(output_path: str):
     story.append(Paragraph(
         "Fast-weight plasticity provides a viable, computationally efficient mechanism for real-time model adaptation. "
         "The complete PyTorch implementation, unit test suite, and interactive Transformer demonstration are released as open-source software "
-        "under the MIT License at: <code>https://github.com/nauheimer/plastic-transformer</code>.",
+        "under the MIT License at: <code>https://github.com/nauheimervater/plastic-transformer</code>.",
         body_style
     ))
     
