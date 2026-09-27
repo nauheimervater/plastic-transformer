@@ -49,7 +49,7 @@ flowchart LR
 ### 1. Installation
 
 ```bash
-git clone https://github.com/nauheimer/plastic-transformer.git
+git clone https://github.com/nauheimervater/plastic-transformer.git
 cd plastic-transformer
 pip install -r requirements.txt
 ```
@@ -133,7 +133,7 @@ If you use this work in your research, please cite:
   title        = {Plasticity Is All You Need? A Testable Proposal for Persistent Fast-Weight Adaptation in Neural Architectures},
   year         = {2026},
   month        = {September},
-  howpublished = {\url{https://github.com/nauheimer/plastic-transformer}},
+  howpublished = {\url{https://github.com/nauheimervater/plastic-transformer}},
   note         = {Preprint}
 }
 ```
