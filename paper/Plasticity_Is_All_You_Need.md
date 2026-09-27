@@ -15,6 +15,7 @@ Fast weights, test-time adaptation, and trainable plasticity have established th
 - **Fast Weights & Attention:** Ba et al. (2016) explored temporary fast-weight memory for recurrent networks. Schlag et al. (2021) demonstrated that linearized self-attention mechanisms operate as fast-weight programmers, bridging transformers and associative memory.
 - **Differentiable Plasticity:** Miconi et al. (2018) optimized plastic connection coefficients through outer-loop meta-learning.
 - **Subspace & Gradient Projection:** Orthogonal Weights Modification (OWM; Zeng et al., 2019) and Gradient Projection Memory (GPM; Saha et al., 2021) project gradient updates onto the orthogonal complement of protected feature subspaces to prevent catastrophic forgetting.
+- **Parameter-Space vs. Activation-Space Orthogonality (O-LoRA):** Wang et al. (2023; O-LoRA) enforce orthogonality among low-rank adapter weights across sequential tasks. Crucially, O-LoRA operates in parameter space (gradient and weight dimensions) and assumes discrete task boundaries. In contrast, our approach projects directly in activation space (onto the nullspace of historical activations) and operates continuously without task boundary demarcation.
 - **Test-Time Training (TTT):** Recent architectures such as TTT-Linear / TTT-MLP (Sun et al., 2024) and Titans (Behrouz et al., 2024) utilize hidden model states updated by an inner-loop gradient step at inference time.
 - **Parameter Importance:** Kirkpatrick et al. (2017; EWC) employ quadratic penalties derived from Fisher information matrices to safeguard critical parameters.
 
@@ -36,7 +37,7 @@ $$\mathcal{L} = \frac{\|E\|_F^2}{2N}$$
 $$P = I - Q Q^T$$
 $$A_{\text{cand}} = (1 - \lambda) A + \frac{\eta \gamma}{N} E^T X P$$
 
-The update is a projected delta rule for this local squared-error objective, followed by thin-QR rank truncation and a Frobenius-norm cap. In an autoregressive language model, obtaining verified target activations $T$ across intermediate hidden layers remains a primary engineering constraint; unverified model generations must not be treated automatically as correct learning targets.
+The update is a projected delta rule for this local squared-error objective, followed by thin-QR rank truncation and a Frobenius-norm cap. In an autoregressive language model, obtaining verified target activations $T$ across intermediate hidden layers remains an unsolved integration requirement; unverified model generations must not be treated automatically as correct learning targets.
 
 Forward evaluation never modifies adapter buffers. The caller invokes `.adapt(X, T)` explicitly after validating a training example.
 
@@ -65,11 +66,24 @@ $$R = \left[ \sqrt{1 - \lambda} P V, \quad \sqrt{\frac{\eta \gamma}{N}} P X^T \r
 
 Thin QR factorizations $L = Q_L R_L$ and $R = Q_R R_R$ reduce the singular value decomposition to the small core matrix $R_L R_R^T \in \mathbb{R}^{m \times m}$. Retaining its leading $r$ singular values, scaling them when their Frobenius norm exceeds $M_{\text{max}}$, and reconstructing the two low-rank factors avoids dense $d_{\text{out}} \times d_{\text{in}}$ matrix materialization.
 
-The computational overhead per forward pass is $\mathcal{O}(N r (d_{\text{in}} + d_{\text{out}}))$. Fast-weight state storage is $\mathcal{O}(r (d_{\text{in}} + d_{\text{out}}) + k d_{\text{in}})$.
+### Computational and Memory Complexity:
+- Thin QR factorization of $L \in \mathbb{R}^{d_{\text{out}} \times m}$ and $R \in \mathbb{R}^{d_{\text{in}} \times m}$: $\mathcal{O}((d_{\text{in}} + d_{\text{out}}) m^2)$.
+- Core SVD of $R_L R_R^T \in \mathbb{R}^{m \times m}$: $\mathcal{O}(m^3)$.
+- Factor reconstruction: $\mathcal{O}((d_{\text{in}} + d_{\text{out}}) m r)$.
+- Total adaptation step complexity: $\mathcal{O}((d_{\text{in}} + d_{\text{out}}) m^2 + m^3)$, where $m = r + N$. The dense dimension product $d_{\text{in}} \cdot d_{\text{out}}$ never appears because full weight matrices are never materialized.
+- Computational overhead per forward pass: $\mathcal{O}(N r (d_{\text{in}} + d_{\text{out}}))$.
+- Fast-weight state storage: $\mathcal{O}(r (d_{\text{in}} + d_{\text{out}}) + k d_{\text{in}})$.
 
-## 5. Measured Experiment
+## 5. Measured Experiment and Reproduction
 
-Run `python -m unittest tests/test_projected_delta.py` to verify implementation correctness.
+To reproduce Table 1 on stdout, run:
+```bash
+python examples/reproduce_benchmark.py
+```
+To run the full unit test suite:
+```bash
+python -m unittest discover -s tests
+```
 
 Configuration: CPU, single-threaded PyTorch, float64; frozen affine projection ($d_{\text{in}}=32, d_{\text{out}}=16$); rank $r=8$; 4 protected basis directions; 8 novel adaptation directions; 160 supervised delta updates per seed. Twenty held-out inputs are linear combinations of the 8 novel directions. Target corrections lie within available rank capacity by construction.
 

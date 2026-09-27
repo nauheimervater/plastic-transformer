@@ -210,6 +210,7 @@ def build_pdf(output_path: str):
         "Fast weights, test-time adaptation, and trainable plasticity have established strong theoretical precedents in modern machine learning: "
         "<br/>&bull; <b>Fast Weights &amp; Linear Attention:</b> Ba et al. (2016) explored fast-weight memory for recurrent networks; Schlag et al. (2021) demonstrated that linearized self-attention mechanisms operate as fast-weight programmers. "
         "<br/>&bull; <b>Subspace &amp; Gradient Projection:</b> Orthogonal Weights Modification (OWM; Zeng et al., 2019) and Gradient Projection Memory (GPM; Saha et al., 2021) project gradient updates onto the orthogonal complement of protected feature subspaces to mitigate catastrophic forgetting. "
+        "<br/>&bull; <b>Parameter vs. Activation Orthogonality (O-LoRA):</b> Wang et al. (2023; O-LoRA) enforce parameter-space orthogonality across discrete sequential tasks. In contrast, our method projects directly in activation space (onto the nullspace of historical activations) and operates continuously without task boundaries. "
         "<br/>&bull; <b>Test-Time Training (TTT):</b> Recent architectures such as TTT-Linear (Sun et al., 2024) and Titans (Behrouz et al., 2024) optimize hidden states via inference-time inner-loop updates. "
         "<br/>&bull; <b>Differentiable Plasticity &amp; EWC:</b> Miconi et al. (2018) optimized plastic connections via outer-loop meta-learning, while Kirkpatrick et al. (2017) utilized Fisher information matrices to penalize changes to important parameters.",
         body_style
@@ -231,6 +232,11 @@ def build_pdf(output_path: str):
         body_style
     ))
     story.append(Paragraph("<b>A<sub>cand</sub> = (1 - &lambda;) A + (&eta; &gamma; / N) E<sup>T</sup> X P</b>", code_style))
+    story.append(Paragraph(
+        "In deep language models, deriving verified intermediate target activations <i>T</i> remains an unsolved integration requirement; "
+        "unverified model generations must not be treated automatically as correct learning targets.",
+        body_style
+    ))
     
     # Section 3
     story.append(Paragraph("3. Subspace Protection &amp; Invariance Properties", h1_style))
@@ -250,12 +256,13 @@ def build_pdf(output_path: str):
     story.append(Paragraph("4. Low-Rank Compression via Thin QR &amp; Core SVD", h1_style))
     story.append(Paragraph(
         "Representing candidate rank updates as <i>L R<sup>T</sup></i> with <i>m = r + N</i> columns: "
-        "<br/>&bull; <i>L = [ &radic;(1-&lambda;) U, &radic;(&eta; &gamma;/N) E<sup>T</sup> ]</i>"
-        "<br/>&bull; <i>R = [ &radic;(1-&lambda;) P V, &radic;(&eta; &gamma;/N) P X<sup>T</sup> ]</i>"
+        "<br/>&bull; <i>L = [ &radic;(1-&lambda;) U, &radic;(&eta; &gamma;/N) E<sup>T</sup> ]</i> &isin; &real;<sup>d<sub>out</sub> &times; m</sup>"
+        "<br/>&bull; <i>R = [ &radic;(1-&lambda;) P V, &radic;(&eta; &gamma;/N) P X<sup>T</sup> ]</i> &isin; &real;<sup>d<sub>in</sub> &times; m</sup>"
         "<br/>Thin QR factorizations <i>L = Q<sub>L</sub> R<sub>L</sub></i> and <i>R = Q<sub>R</sub> R<sub>R</sub></i> "
-        "reduce the SVD to the small core matrix <i>R<sub>L</sub> R<sub>R</sub><sup>T</sup></i>. "
-        "Truncating to rank <i>r</i> and enforcing a Frobenius norm cap avoids dense matrix materialization, maintaining "
-        "strict O(<i>N r (d<sub>in</sub> + d<sub>out</sub>)</i>) runtime efficiency.",
+        "reduce the SVD to the small core matrix <i>R<sub>L</sub> R<sub>R</sub><sup>T</sup> &isin; &real;<sup>m &times; m</sup></i>. "
+        "Total adaptation step complexity is <b>O((d<sub>in</sub> + d<sub>out</sub>) m<sup>2</sup> + m<sup>3</sup>)</b>. "
+        "Crucially, the dense dimension product <i>d<sub>in</sub> &times; d<sub>out</sub></i> never appears in the computational complexity, "
+        "as full weight matrices are never materialized. Forward overhead remains O(<i>N r (d<sub>in</sub> + d<sub>out</sub>)</i>).",
         body_style
     ))
     
@@ -263,7 +270,8 @@ def build_pdf(output_path: str):
     story.append(Paragraph("5. Empirical Validation &amp; Reproducibility", h1_style))
     story.append(Paragraph(
         "We evaluated <i>PlasticLinearProjected</i> across five independent random seeds (CPU, float64, 32-to-16 projection, rank 8, "
-        "4 protected directions, 8 novel adaptation directions, 160 updates; verified via <code>tests/test_projected_delta.py</code>).",
+        "4 protected directions, 8 novel adaptation directions, 160 updates). The exact results below are reproducible via "
+        "<code>python examples/reproduce_benchmark.py</code> (verified with <code>tests/test_projected_delta.py</code>):",
         body_style
     ))
     

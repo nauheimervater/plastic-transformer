@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
 from torch import nn
-from plastic_transformer import PlasticLinearProjected
+from plastic_transformer import PlasticLinearProjected, PlasticModelWrapper
 
 
 class TestPlasticLinearProjected(unittest.TestCase):
@@ -64,5 +64,51 @@ class TestPlasticLinearProjected(unittest.TestCase):
         torch.testing.assert_close(adapter(x), restored(x))
 
 
+class TestPlasticModelWrapper(unittest.TestCase):
+    def test_wrapper_calibration_and_invariance(self):
+        torch.manual_seed(42)
+        
+        class SimpleNet(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.q_proj = nn.Linear(16, 16, dtype=torch.float64)
+                self.down_proj = nn.Linear(16, 8, dtype=torch.float64)
+            def forward(self, x):
+                return self.down_proj(torch.relu(self.q_proj(x)))
+                
+        base_net = SimpleNet()
+        wrapper = PlasticModelWrapper(base_net, rank=4)
+        self.assertEqual(len(wrapper.plastic_layers), 2)
+        
+        # Calibration inputs (e.g. baseline task)
+        calib_data = [torch.randn(10, 16, dtype=torch.float64) for _ in range(3)]
+        wrapper.calibrate_subspace(calib_data, k=4)
+        
+        for layer in wrapper.plastic_layers:
+            self.assertEqual(layer.Q.shape[1], 4)
+            
+        # Adapt on orthogonal inputs
+        for name, layer in wrapper.plastic_layer_map.items():
+            P = torch.eye(layer.base.in_features, dtype=torch.float64) - layer.Q @ layer.Q.T
+            novel_x = (P @ torch.randn(layer.base.in_features, 3, dtype=torch.float64)).T
+            target = layer.base(novel_x) + 0.1 * torch.randn(3, layer.base.out_features, dtype=torch.float64)
+            layer.adapt(novel_x, target)
+            
+            # Check invariance along Q
+            q_in = layer.Q.T
+            out_before = layer.base(q_in)
+            out_after = layer(q_in)
+            diff = (out_after - out_before).abs().max().item()
+            self.assertLess(diff, 1e-15)
+            
+        # Test gate = 0.0
+        wrapper.set_gate(0.0)
+        test_in = torch.randn(4, 16, dtype=torch.float64)
+        out_frozen = base_net(test_in)
+        out_gated = wrapper(test_in)
+        torch.testing.assert_close(out_frozen, out_gated)
+
+
 if __name__ == "__main__":
     unittest.main()
+

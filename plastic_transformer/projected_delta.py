@@ -63,6 +63,24 @@ class PlasticLinearProjected(nn.Module):
             threshold = max(basis.shape) * torch.finfo(basis.dtype).eps * (s.max() if s.numel() else 0)
             q = u[:, s > threshold]
         self.register_buffer('Q', q)
+        if protected_basis is not None:
+            self.set_protected_subspace(protected_basis)
+
+    @torch.no_grad()
+    def set_protected_subspace(self, basis: torch.Tensor = None):
+        """
+        Set or update the orthonormal basis Q for the protected subspace.
+        Subsequent adaptations guarantee Delta W * Q = 0.
+        """
+        if basis is None or (isinstance(basis, torch.Tensor) and basis.numel() == 0):
+            self.Q = self.base.weight.new_empty(self.base.in_features, 0)
+            return
+        basis = torch.as_tensor(basis, device=self.base.weight.device, dtype=self.base.weight.dtype)
+        if basis.ndim != 2 or basis.shape[0] != self.base.in_features or not torch.isfinite(basis).all():
+            raise ValueError(f"Protected basis must have shape ({self.base.in_features}, k)")
+        u, s, _ = torch.linalg.svd(basis, full_matrices=False)
+        threshold = max(basis.shape) * torch.finfo(basis.dtype).eps * (s.max() if s.numel() else 0)
+        self.Q = u[:, s > threshold]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Read-only: inference forward pass never modifies weights

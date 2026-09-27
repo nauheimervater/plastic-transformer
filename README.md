@@ -47,6 +47,7 @@ flowchart LR
 This work investigates the intersection of classical fast weights and modern continual learning:
 - **Fast Weights & Attention:** Ba et al. (2016); Schlag et al. (2021) demonstrated that linear transformers act as fast-weight programmers.
 - **Subspace Gradient Projection:** Orthogonal Weights Modification (OWM; Zeng et al., 2019) and Gradient Projection Memory (GPM; Saha et al., 2021) project parameter updates onto orthogonal complements to prevent catastrophic interference.
+- **Parameter vs. Activation Orthogonality (O-LoRA):** Wang et al. (2023; O-LoRA) enforce parameter-space orthogonality across discrete sequential tasks. In contrast, our approach projects directly in activation space (onto the nullspace of historical activations) and operates continuously without discrete task boundaries.
 - **Test-Time Training (TTT):** Sun et al. (2024) and Titans (Behrouz et al., 2024) explore inference-time inner-loop gradient adaptation.
 
 ---
@@ -61,27 +62,26 @@ cd plastic-transformer
 pip install -r requirements.txt
 ```
 
-### 2. Injecting Plasticity into PyTorch Models
+### 2. Injecting Plasticity and Subspace Calibration
 
 ```python
 import torch
 from plastic_transformer import PlasticModelWrapper
 
-# Wrap any PyTorch model (e.g. Llama/Qwen attention layers)
+# Wrap any PyTorch model (e.g. Llama/Qwen attention and MLP layers)
 model = YourPretrainedTransformer()
 plastic_model = PlasticModelWrapper(
     model, 
-    target_modules=["q_proj", "v_proj", "o_proj"], 
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"], 
     rank=8, 
-    learning_rate=0.5,
-    layer_type="projected"
+    learning_rate=0.5
 )
 
-# Standard forward inference (read-only; weights are never modified during forward pass)
-out = plastic_model(input_tokens)
+# Automated Subspace Calibration on baseline prompts (extracts protected span(Q)):
+plastic_model.calibrate_subspace(baseline_prompts, k=4)
 
-# Explicit target-driven adaptation step on intermediate layer
-# layer.adapt(x_activations, target_activations)
+# Standard forward inference (read-only; forward evaluation never alters weights)
+out = plastic_model(input_tokens)
 
 # Save lightweight fast-weight buffers (< 5 MB)
 plastic_model.save_synaptic_memory("episodic_snapshot.pt")
@@ -97,19 +97,19 @@ plastic_model.set_gate(0.0)
 Run the reproducible verification suite:
 
 ```bash
-# 1. Run all unit tests (subspace invariance, dense reference, state roundtrip)
+# 1. Run all unit tests (subspace invariance, calibration, dense reference, state roundtrip)
 python -m unittest discover -s tests
 
-# 2. Run formal projected delta-rule regression benchmark
-python examples/demo_projected_adaptation.py
+# 2. Reproduce exact Table 1 multi-seed benchmark (seeds 0..4)
+python examples/reproduce_benchmark.py
 
-# 3. Run Llama-style decoder gate & serialization demo
+# 3. Run Llama-style decoder calibration & adaptation demo
 python examples/demo_transformer.py
 ```
 
 ### Measured Subspace Invariance Benchmark:
 
-Tested on CPU, float64, 32-to-16 projection, rank 8, 4 protected basis directions, 8 novel adaptation directions, 160 updates:
+Tested on CPU, float64, 32-to-16 projection, rank 8, 4 protected basis directions, 8 novel adaptation directions, 160 updates (run `python examples/reproduce_benchmark.py` to reproduce):
 
 | Seed | Held-out MSE Before | Held-out MSE After | Max Protected Change | Invariance Check |
 |:---:|:---:|:---:|:---:|:---:|
