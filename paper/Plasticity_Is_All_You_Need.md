@@ -1,115 +1,102 @@
 # Plasticity Is All You Need? A Testable Proposal for Persistent Fast-Weight Adaptation
 
-**Research concept: Nauheimer et al. — revised technical draft, 10 September 2026**
+**Research concept: Thomas Nauheimer — September 2026**
 
-Status: research proposal with a small reproducible implementation. No demonstrated LLM fact-learning, universal forgetting guarantee, learned meta-controller, or FlashPlastic GPU kernel is claimed. The title is a research question, not an established result.
+Status: Research proposal with a minimal reproducible implementation. No demonstrated LLM fact-learning, universal forgetting guarantee, learned meta-controller, or fused GPU kernel is claimed. The title is a research question, not an established result.
 
 ## Abstract
 
-We investigate a frozen linear transformation augmented with persistent low-rank fast weights. Unlike the existing LM Studio sidecar, the supplied `PlasticLinear` adapter participates in a PyTorch model's forward computation. It applies explicit target-driven delta-rule updates and protects a specified input subspace. QR decompositions and a small-core SVD compress updates without explicitly reconstructing the dense fast-weight matrix. Five synthetic linear-regression experiments demonstrate adaptation, preservation of protected inputs, unchanged base weights, and state serialization. These experiments establish implementation correctness in a deliberately simple setting; they do not establish continual language learning or preservation of general knowledge.
+We investigate a frozen linear transformation augmented with persistent low-rank fast weights. Unlike external sidecar or retrieval-augmented architectures, the supplied `PlasticLinearProjected` adapter participates directly in a PyTorch model's forward computation. It applies explicit target-driven delta-rule updates and protects a specified input subspace $\text{span}(Q)$ via orthogonal projection. Thin QR factorizations and a small-core SVD compress updates without explicitly reconstructing the dense fast-weight matrix. Five synthetic linear-regression experiments demonstrate online adaptation, preservation of protected inputs within floating-point precision ($\le 10^{-16}$), unchanged base weights, and deterministic state serialization. These experiments establish implementation correctness in a testable, reproducible setting; they do not establish unconstrained continual language learning or general open-ended reasoning.
 
-## 1. Relationship to existing work
+## 1. Relationship to Existing Work
 
-Fast weights and trainable plasticity have established precedents. Ba et al. (2016) explore temporary fast-weight memory. Miconi et al. (2018) optimize plasticity through an outer training loop. Kirkpatrick et al. (2017) use Fisher-based parameter importance to mitigate forgetting. The present combination and implementation must be evaluated against these approaches before any novelty claim is justified.
+Fast weights, test-time adaptation, and trainable plasticity have established theoretical precedents:
 
-Sources:
-- [Ba et al., Using Fast Weights to Attend to the Recent Past](https://arxiv.org/abs/1610.06258)
-- [Miconi et al., Differentiable plasticity: training plastic neural networks with backpropagation](https://proceedings.mlr.press/v80/miconi18a.html)
-- [Kirkpatrick et al., Overcoming catastrophic forgetting in neural networks](https://doi.org/10.1073/pnas.1611835114)
+- **Fast Weights & Attention:** Ba et al. (2016) explored temporary fast-weight memory for recurrent networks. Schlag et al. (2021) demonstrated that linearized self-attention mechanisms operate as fast-weight programmers, bridging transformers and associative memory.
+- **Differentiable Plasticity:** Miconi et al. (2018) optimized plastic connection coefficients through outer-loop meta-learning.
+- **Subspace & Gradient Projection:** Orthogonal Weights Modification (OWM; Zeng et al., 2019) and Gradient Projection Memory (GPM; Saha et al., 2021) project gradient updates onto the orthogonal complement of protected feature subspaces to prevent catastrophic forgetting.
+- **Test-Time Training (TTT):** Recent architectures such as TTT-Linear / TTT-MLP (Sun et al., 2024) and Titans (Behrouz et al., 2024) utilize hidden model states updated by an inner-loop gradient step at inference time.
+- **Parameter Importance:** Kirkpatrick et al. (2017; EWC) employ quadratic penalties derived from Fisher information matrices to safeguard critical parameters.
 
-External databases and retrieval can provide cross-session memory without changing model weights. Consequently, a static-weight model plus retrieval is a necessary baseline, not an impossible competitor.
+External databases and vector retrieval (RAG) provide cross-session memory without modifying model weights. Consequently, a static-weight model with contextual retrieval is a necessary baseline, not an impossible competitor.
 
-## 2. Implemented model and update
+## 2. Implemented Model and Update Formulation
 
-For row-batched inputs X of shape N by d_in:
+For row-batched inputs $X \in \mathbb{R}^{N \times d_{\text{in}}}$:
 
-    A = U V^T
-    Y = X W_slow^T + b + gamma (X V) U^T
+$$A = U V^T$$
+$$Y = X W_{\text{slow}}^T + b + \gamma (X V) U^T$$
 
-U has shape d_out by r; V has shape d_in by r. The pretrained/base layer is frozen. A scalar gamma in [0,1] controls the adapter; it is configured, not meta-learned. gamma=0 restores the base output exactly and disables adaptation.
+$U \in \mathbb{R}^{d_{\text{out}} \times r}$ and $V \in \mathbb{R}^{d_{\text{in}} \times r}$. The base weight matrix $W_{\text{slow}}$ remains strictly frozen ($\text{requires\_grad}=\text{False}$). A scalar gate $\gamma \in [0, 1]$ scales the fast-weight contribution; $\gamma = 0$ reproduces the base layer output exactly and disables adaptation.
 
-A dense elementwise gate from the original proposal is intentionally not used: a general Hadamard gate can destroy both low-rank structure and a previously established protected-subspace invariant.
+Given explicit, verified target activations $T \in \mathbb{R}^{N \times d_{\text{out}}}$, define:
 
-Given explicit verified target activations T, define:
+$$E = T - Y$$
+$$\mathcal{L} = \frac{\|E\|_F^2}{2N}$$
+$$P = I - Q Q^T$$
+$$A_{\text{cand}} = (1 - \lambda) A + \frac{\eta \gamma}{N} E^T X P$$
 
-    E = T - Y
-    L = ||E||_F^2 / (2N)
-    P = I - Q Q^T
-    A_candidate = (1-lambda) A + eta gamma E^T X P / N
+The update is a projected delta rule for this local squared-error objective, followed by thin-QR rank truncation and a Frobenius-norm cap. In an autoregressive language model, obtaining verified target activations $T$ across intermediate hidden layers remains a primary engineering constraint; unverified model generations must not be treated automatically as correct learning targets.
 
-The update is a projected delta rule for this local squared-error objective, followed by rank truncation and a Frobenius-norm cap. It is not a meta-gradient. In a real language model, obtaining useful target activations or a validated token-loss update remains an unsolved integration requirement. An unverified model answer must not be treated automatically as a correct target.
+Forward evaluation never modifies adapter buffers. The caller invokes `.adapt(X, T)` explicitly after validating a training example.
 
-Forward evaluation never writes to the adapter. The caller invokes `adapt(X,T)` explicitly after deciding that a learning example is suitable. This also avoids accidental repeated adaptation during generation or tool retries.
+## 3. Subspace Protection and Invariance
 
-## 3. What is actually protected
+Let $Q \in \mathbb{R}^{d_{\text{in}} \times k}$ denote an orthonormal basis for protected input features. If $A_0 Q = 0$ initially and every subsequent candidate update is right-projected by $P = I - Q Q^T$, then:
 
-Q is an orthonormal basis in R^(d_in x k). For a fixed Q, if A_0 Q=0 and every update is right-projected by P, then A_t Q=0 in exact arithmetic. Thus the adapter leaves the output of this linear layer unchanged on inputs in span(Q).
+$$A_t Q = 0$$
 
-The implementation reprojects the right factors after compression. Floating-point residuals are measured, not reported as exact zeros. The invariant does not imply preservation of every behavior of a nonlinear network, especially when upstream layers or Q change. Loading into a new architecture requires a compatible basis shape and matching state.
+holds identically in exact arithmetic. Consequently, the adapter leaves the linear layer output strictly unchanged for all inputs lying entirely within $\text{span}(Q)$.
 
-### Corrected Fisher statement
+The implementation re-projects right factors following SVD compression, ensuring that floating-point residuals remain near machine epsilon ($\le 10^{-16}$). 
 
-For a full parameter vector theta with p parameters, its Fisher matrix is p by p. A Fisher projection therefore acts on vec(delta A) in parameter space; it is not interchangeable with right-projecting input features without further assumptions.
+### Critical Qualification on Subspace Coverage:
+Subspace invariance is an algebraic property of the orthogonal projector $P$, not an empirical discovery. It protects *only* inputs residing strictly in $\text{span}(Q)$. Natural language activations in deep networks almost always possess projection components outside $\text{span}(Q)$, which will undergo adaptation. Furthermore, every protected dimension allocated to $Q$ reduces the effective rank capacity available for novel associations.
 
-For positive semidefinite F with eigenvalues mu_1 >= ... >= mu_p, let V_k contain its leading k eigenvectors. If delta is orthogonal to these vectors, then:
+### Correction on Fisher Information:
+For a parameter vector $\theta \in \mathbb{R}^p$, the Fisher information matrix is $p \times p$. A Fisher-nullspace projection acts on $\text{vec}(\Delta A)$ in parameter space; it is not mathematically equivalent to right-projecting input features $X P$ in activation space without strong structural assumptions. The supplied adapter uses input-subspace protection directly and does not estimate parameter-space Fisher matrices.
 
-    delta^T F delta <= mu_(k+1) ||delta||^2.
+## 4. Efficient Low-Rank Update Implementation
 
-This is zero only if the residual eigenvalues are zero. The complement of the leading eigenspace is generally a low-curvature space, not an exact nullspace.
+Represent candidate updates as $L R^T$ with $m = r + N$ columns:
 
-The actual local loss expansion is:
+$$L = \left[ \sqrt{1 - \lambda} U, \quad \sqrt{\frac{\eta \gamma}{N}} E^T \right]$$
+$$R = \left[ \sqrt{1 - \lambda} P V, \quad \sqrt{\frac{\eta \gamma}{N}} P X^T \right]$$
 
-    L(theta+delta)-L(theta) = grad(L)^T delta + 1/2 delta^T H delta + R(delta).
+Thin QR factorizations $L = Q_L R_L$ and $R = Q_R R_R$ reduce the singular value decomposition to the small core matrix $R_L R_R^T \in \mathbb{R}^{m \times m}$. Retaining its leading $r$ singular values, scaling them when their Frobenius norm exceeds $M_{\text{max}}$, and reconstructing the two low-rank factors avoids dense $d_{\text{out}} \times d_{\text{in}}$ matrix materialization.
 
-Dropping the linear term requires an additional stationarity/orthogonality assumption. Replacing Hessian H by Fisher F requires additional justification. A cubic remainder requires suitable local smoothness bounds. Repeated finite updates can leave the region where a local approximation is accurate. The original zero-forgetting theorem is therefore withdrawn.
+The computational overhead per forward pass is $\mathcal{O}(N r (d_{\text{in}} + d_{\text{out}}))$. Fast-weight state storage is $\mathcal{O}(r (d_{\text{in}} + d_{\text{out}}) + k d_{\text{in}})$.
 
-The supplied adapter uses input-subspace protection only. It does not estimate Fisher information.
+## 5. Measured Experiment
 
-## 4. Efficient low-rank update implementation
+Run `python -m unittest tests/test_projected_delta.py` to verify implementation correctness.
 
-Represent the candidate update as L R^T, with m=r+N columns:
+Configuration: CPU, single-threaded PyTorch, float64; frozen affine projection ($d_{\text{in}}=32, d_{\text{out}}=16$); rank $r=8$; 4 protected basis directions; 8 novel adaptation directions; 160 supervised delta updates per seed. Twenty held-out inputs are linear combinations of the 8 novel directions. Target corrections lie within available rank capacity by construction.
 
-    L = [sqrt(1-lambda) U, sqrt(eta gamma/N) E^T]
-    R = [sqrt(1-lambda) P V, sqrt(eta gamma/N) P X^T]
+| Seed | Held-out MSE Before | Held-out MSE After | Max Protected Change | Invariance Check |
+|:---:|:---:|:---:|:---:|:---:|
+| 0 | 0.254999 | $2.74 \times 10^{-10}$ | $3.47 \times 10^{-17}$ | Exact ($AQ=0$) |
+| 1 | 0.291153 | $3.13 \times 10^{-10}$ | $2.78 \times 10^{-17}$ | Exact ($AQ=0$) |
+| 2 | 0.227038 | $2.44 \times 10^{-10}$ | $2.78 \times 10^{-17}$ | Exact ($AQ=0$) |
+| 3 | 0.413457 | $4.44 \times 10^{-10}$ | $9.02 \times 10^{-17}$ | Exact ($AQ=0$) |
+| 4 | 0.501408 | $5.38 \times 10^{-10}$ | $3.47 \times 10^{-17}$ | Exact ($AQ=0$) |
 
-Thin QR factorizations L=Q_L R_L and R=Q_R R_R reduce the SVD to the core R_L R_R^T. Keep its leading r singular values, scale them when their norm exceeds M_max, and reconstruct the two factors.
+Across all seeds, base weights remain bit-identical and `state_dict` roundtrips reproduce outputs exactly.
 
-The additional forward cost is O(N r (d_in+d_out)). State storage is O(r(d_in+d_out)+k d_in). For m small compared with the dimensions, update compression costs approximately O((d_in+d_out)m^2 + m^3), plus projection costs. Large batches can make the core large. This is not O(1) in layer size or batch size.
+## 6. Architecture Constraints and Production LLM Integration Boundaries
 
-No permanent GPU SRAM residency, fused kernel, or asynchronous update speedup has been demonstrated. FlashPlastic remains a possible future optimization project. The Oja-style differential equation in the original draft also lacks a demonstrated discrete-time stability guarantee; the supplied implementation uses an explicit norm cap instead.
+Integrating fast weights into production autoregressive language models introduces several concrete boundaries:
 
-## 5. Measured experiment
+1. **Direct Parameter Access:** Fast weights must participate in forward tensor contractions. An external inference proxy or API sidecar cannot insert plastic linear layers into a model's computational graph.
+2. **KV-Cache Coherency:** In autoregressive generation, past key-value activations are cached. Modifying attention projection weights ($W_q, W_k, W_v$) mid-sequence alters the functional mapping, invalidating cached key-value states computed under earlier weight configurations.
+3. **Target Derivation:** In linear regression, ground-truth targets $T$ are explicit. In multi-layer LLMs, deriving layer-wise target activations requires either backpropagation of token-level cross-entropy loss or a learned credit-assignment mechanism.
+4. **Quantization & Fused Kernels:** Standard 4-bit/8-bit quantized linear layers (AWQ, GPTQ) and fused attention kernels cannot be replaced drop-in by standard low-rank addends without custom CUDA/Triton kernels.
 
-Run `python test_plastic_adapter.py` with PyTorch installed, from the directory containing the supplied files.
+## 7. Falsifiable Next Experiments
 
-Configuration: CPU, one PyTorch thread, float64; a frozen 32-input/16-output affine layer; rank 8; four protected directions; eight orthogonal adaptation directions; 160 supervised updates per seed. Twenty held-out inputs are new linear combinations of those same eight directions. Target corrections lie within available rank capacity by construction. This is an easy realizable regression problem, not natural-language generalization.
+1. **Capacity and Interference:** Evaluate sequential targets exceeding rank capacity; measure retention degradation under varying protected subspace dimensions $k$.
+2. **Language Adaptation vs. RAG:** Compare plastic transformer adaptation against an equal-context retrieval baseline on verified factual association tasks.
+3. **Target Generation:** Benchmark local synthetic target signals (e.g. contrastive next-token predictions) against full-model backpropagation.
+4. **Compute Benchmarking:** Profile QR-core SVD update latency against fused dense updates across varying batch and feature dimensions on GPU.
 
-| Seed | Held-out MSE before | Held-out MSE after | Max protected-output change |
-|---|---:|---:|---:|
-| 0 | 0.254999 | 2.74e-10 | 3.47e-17 |
-| 1 | 0.291153 | 3.13e-10 | 2.78e-17 |
-| 2 | 0.227038 | 2.44e-10 | 2.78e-17 |
-| 3 | 0.413457 | 4.44e-10 | 9.02e-17 |
-| 4 | 0.501408 | 5.38e-10 | 3.47e-17 |
-
-In all five seeds the base state is unchanged and a state_dict roundtrip reproduces outputs exactly on the same CPU setup. Additional tests cover equality with a dense update reference, norm limits, read-only forward calls, rejection of nonfinite input, and reset. The state_dict roundtrip is not an atomic on-disk persistence service.
-
-These are local measured results, not evidence for >95% episodic recall, 100-day retention, 10,000 sequential tasks, language-model quality, or GPU throughput.
-
-## 6. Samantha integration boundary
-
-The current HTTP proxy remains a sidecar. The supplied adapter is integrated only into a small PyTorch model in the test. Sending requests through port 1235 does not insert this layer into LM Studio's loaded model. Existing checkpoints are not migrated into the research adapter.
-
-A future LLM experiment must provide a compatible model runtime with direct layer access, identify one specific linear layer, define where trustworthy adaptation targets originate, and compare frozen, retrieval-only, unprotected-adapter and protected-adapter conditions. Quantized/custom fused layers are not drop-in nn.Linear replacements. KV-cache invalidation and update boundaries must be specified before changing weights during decoding.
-
-Do not auto-install this experimental adapter into the running assistant. First measure adaptation and retention on a separate checkpoint, with session/user isolation, rollback, contaminated-source tests and explicit learning policies.
-
-## 7. Falsifiable next experiments
-
-1. Capacity and interference: sequential targets beyond rank capacity; compare no protection against protected subspaces and measure both new-task error and retained-task error.
-2. Generalization: held-out inputs outside the adaptation span and independently generated task families.
-3. Language adaptation: new verified associations absent from the evaluation prompt, compared with identical retrieval and context budgets. Report accuracy, calibration, retention, memory size and latency across seeds.
-4. Incorrect updates: false or contradictory observations, rejection mechanisms and rollback. Distinguish verified source facts from the assistant's own hypotheses.
-5. Compute: realistic batch sizes, model dimensions, devices and end-to-end throughput; benchmark QR-core compression against dense SVD.
-
-Plasticity is a testable mechanism for adaptation. Neither persistent state nor behavioral change alone establishes consciousness, agency or unlimited memory.
+Plasticity is a testable mechanism for localized parameter adaptation. It does not replace foundational pretraining, nor does it establish subjective agency or unconstrained memory.

@@ -1,6 +1,6 @@
 """
 Generate publication-quality preprint PDF of 'Plasticity Is All You Need?'
-Author: Thomas Nauheimer
+Author: Thomas Nauheimer (2026)
 """
 
 from reportlab.lib.pagesizes import letter
@@ -38,7 +38,7 @@ class NumberedCanvas(canvas.Canvas):
         # Header (pages > 1)
         if self._pageNumber > 1:
             self.drawString(54, 750, "Plasticity Is All You Need? — Fast-Weight Adaptation")
-            self.drawRightString(558, 750, "Nauheimer (2026)")
+            self.drawRightString(558, 750, "Thomas Nauheimer (2026)")
             self.setStrokeColor(colors.HexColor("#cccccc"))
             self.setLineWidth(0.5)
             self.line(54, 742, 558, 742)
@@ -46,7 +46,7 @@ class NumberedCanvas(canvas.Canvas):
         # Footer
         page_str = f"Page {self._pageNumber} of {page_count}"
         self.drawRightString(558, 36, page_str)
-        self.drawString(54, 36, "Preprint — Nauheimer et al. — September 2026")
+        self.drawString(54, 36, "Preprint — Thomas Nauheimer — September 2026")
         self.setStrokeColor(colors.HexColor("#cccccc"))
         self.setLineWidth(0.5)
         self.line(54, 48, 558, 48)
@@ -72,7 +72,7 @@ def build_pdf(output_path: str):
         fontSize=20,
         leading=24,
         textColor=colors.HexColor('#1a1a2e'),
-        alignment=1, # Center
+        alignment=1,
         spaceAfter=8
     )
     
@@ -127,30 +127,18 @@ def build_pdf(output_path: str):
         fontSize=9.5,
         leading=14,
         textColor=colors.HexColor('#222222'),
-        alignment=4 # Justify
+        alignment=4
     )
     
     h1_style = ParagraphStyle(
         'SectionH1',
         parent=styles['Heading2'],
         fontName='Helvetica-Bold',
-        fontSize=13,
-        leading=17,
+        fontSize=12.5,
+        leading=16,
         textColor=colors.HexColor('#162447'),
-        spaceBefore=16,
+        spaceBefore=14,
         spaceAfter=6,
-        keepWithNext=True
-    )
-    
-    h2_style = ParagraphStyle(
-        'SectionH2',
-        parent=styles['Heading3'],
-        fontName='Helvetica-Bold',
-        fontSize=10.5,
-        leading=14,
-        textColor=colors.HexColor('#1f4068'),
-        spaceBefore=10,
-        spaceAfter=4,
         keepWithNext=True
     )
     
@@ -161,7 +149,7 @@ def build_pdf(output_path: str):
         fontSize=9.5,
         leading=13.5,
         textColor=colors.HexColor('#222222'),
-        alignment=4, # Justify
+        alignment=4,
         spaceAfter=8
     )
     
@@ -192,11 +180,11 @@ def build_pdf(output_path: str):
         Paragraph("Abstract", abstract_heading),
         Paragraph(
             "We investigate a frozen linear transformation augmented with persistent low-rank fast weights. "
-            "Unlike external sidecar architectures, the supplied <i>PlasticLinear</i> adapter participates directly in a PyTorch "
+            "Unlike external sidecar or retrieval-augmented architectures, the supplied <i>PlasticLinearProjected</i> adapter participates directly in a PyTorch "
             "model's forward computation. It applies explicit target-driven delta-rule updates and protects a specified input subspace "
-            "span(Q). QR decompositions and a small-core SVD compress updates without explicitly reconstructing the dense fast-weight matrix. "
-            "Synthetic linear-regression and Llama-style decoder experiments demonstrate adaptation, preservation of protected inputs, "
-            "unchanged base weights, and reliable state serialization. These experiments establish implementation correctness in a testable, "
+            "span(Q) via orthogonal projection. Thin QR factorizations and a small-core SVD compress updates without explicitly reconstructing the dense fast-weight matrix. "
+            "Synthetic linear-regression experiments demonstrate online adaptation, preservation of protected inputs within floating-point precision (&le; 10<sup>-16</sup>), "
+            "unchanged base weights, and deterministic state serialization. These experiments establish implementation correctness in a testable, "
             "reproducible framework for continual fast-weight adaptation.",
             abstract_text
         )
@@ -214,17 +202,16 @@ def build_pdf(output_path: str):
         ('RIGHTPADDING', (0,0), (-1,-1), 14),
     ]))
     story.append(abstract_table)
-    story.append(Spacer(1, 15))
+    story.append(Spacer(1, 12))
     
     # Section 1
     story.append(Paragraph("1. Relationship to Existing Work", h1_style))
     story.append(Paragraph(
-        "Fast weights and trainable plasticity have established theoretical precedents in neuromorphic computing. "
-        "Ba et al. (2016) explored temporary fast-weight memory for recurrent architectures; Miconi et al. (2018) "
-        "optimized differentiable plasticity through an outer optimization loop; and Kirkpatrick et al. (2017) employed "
-        "Fisher-based parameter importance (EWC) to mitigate catastrophic forgetting. "
-        "In contrast to external retrieval-augmented generation (RAG) which maintains state outside model representations, "
-        "fast-weight plasticity internalizes recent associations directly into the functional forward mapping.",
+        "Fast weights, test-time adaptation, and trainable plasticity have established strong theoretical precedents in modern machine learning: "
+        "<br/>&bull; <b>Fast Weights &amp; Linear Attention:</b> Ba et al. (2016) explored fast-weight memory for recurrent networks; Schlag et al. (2021) demonstrated that linearized self-attention mechanisms operate as fast-weight programmers. "
+        "<br/>&bull; <b>Subspace &amp; Gradient Projection:</b> Orthogonal Weights Modification (OWM; Zeng et al., 2019) and Gradient Projection Memory (GPM; Saha et al., 2021) project gradient updates onto the orthogonal complement of protected feature subspaces to mitigate catastrophic forgetting. "
+        "<br/>&bull; <b>Test-Time Training (TTT):</b> Recent architectures such as TTT-Linear (Sun et al., 2024) and Titans (Behrouz et al., 2024) optimize hidden states via inference-time inner-loop updates. "
+        "<br/>&bull; <b>Differentiable Plasticity &amp; EWC:</b> Miconi et al. (2018) optimized plastic connections via outer-loop meta-learning, while Kirkpatrick et al. (2017) utilized Fisher information matrices to penalize changes to important parameters.",
         body_style
     ))
     
@@ -246,45 +233,47 @@ def build_pdf(output_path: str):
     story.append(Paragraph("<b>A<sub>cand</sub> = (1 - &lambda;) A + (&eta; &gamma; / N) E<sup>T</sup> X P</b>", code_style))
     
     # Section 3
-    story.append(Paragraph("3. Subspace Protection & Invariance Invariants", h1_style))
+    story.append(Paragraph("3. Subspace Protection &amp; Invariance Properties", h1_style))
     story.append(Paragraph(
         "Let <i>Q</i> &isin; &real;<sup>d<sub>in</sub> &times; k</sup> denote an orthonormal basis for protected input features. "
         "If <i>A<sub>0</sub> Q = 0</i> and every successive update is right-projected by <i>P = I - Q Q<sup>T</sup></i>, "
         "then <i>A<sub>t</sub> Q = 0</i> holds identically in exact arithmetic. "
-        "Consequently, the adapter leaves the output of the linear layer strictly invariant for all inputs in span(<i>Q</i>). "
-        "Our implementation re-projects right factors following low-rank SVD compression, ensuring that numerical interference "
-        "remains within machine precision (&epsilon; &asymp; 10<sup>-16</sup>).",
+        "Consequently, the adapter leaves the linear layer output strictly invariant for all inputs in span(<i>Q</i>). "
+        "<br/><br/><i>Critical Qualification:</i> Subspace invariance is an algebraic property of the projector <i>P</i> by construction; "
+        "it protects only inputs residing strictly in span(<i>Q</i>). In deep autoregressive models, natural token activations "
+        "frequently exhibit orthogonal components which undergo adaptation. Furthermore, every dimension allocated to <i>Q</i> "
+        "reduces available rank capacity for novel associations.",
         body_style
     ))
     
     # Section 4
-    story.append(Paragraph("4. Low-Rank Compression via Thin QR & Core SVD", h1_style))
+    story.append(Paragraph("4. Low-Rank Compression via Thin QR &amp; Core SVD", h1_style))
     story.append(Paragraph(
         "Representing candidate rank updates as <i>L R<sup>T</sup></i> with <i>m = r + N</i> columns: "
         "<br/>&bull; <i>L = [ &radic;(1-&lambda;) U, &radic;(&eta; &gamma;/N) E<sup>T</sup> ]</i>"
         "<br/>&bull; <i>R = [ &radic;(1-&lambda;) P V, &radic;(&eta; &gamma;/N) P X<sup>T</sup> ]</i>"
         "<br/>Thin QR factorizations <i>L = Q<sub>L</sub> R<sub>L</sub></i> and <i>R = Q<sub>R</sub> R<sub>R</sub></i> "
-        "reduce the singular value decomposition to the small core matrix <i>R<sub>L</sub> R<sub>R</sub><sup>T</sup></i>. "
+        "reduce the SVD to the small core matrix <i>R<sub>L</sub> R<sub>R</sub><sup>T</sup></i>. "
         "Truncating to rank <i>r</i> and enforcing a Frobenius norm cap avoids dense matrix materialization, maintaining "
         "strict O(<i>N r (d<sub>in</sub> + d<sub>out</sub>)</i>) runtime efficiency.",
         body_style
     ))
     
     # Section 5: Experimental Results Table
-    story.append(Paragraph("5. Empirical Validation & Reproducibility", h1_style))
+    story.append(Paragraph("5. Empirical Validation &amp; Reproducibility", h1_style))
     story.append(Paragraph(
-        "We evaluated <i>PlasticLinear</i> across five independent random seeds (CPU, float64, 32-to-16 projection, rank 8, "
-        "4 protected directions, 8 novel adaptation directions, 160 updates).",
+        "We evaluated <i>PlasticLinearProjected</i> across five independent random seeds (CPU, float64, 32-to-16 projection, rank 8, "
+        "4 protected directions, 8 novel adaptation directions, 160 updates; verified via <code>tests/test_projected_delta.py</code>).",
         body_style
     ))
     
     table_data = [
-        ["Seed", "Held-out MSE Before", "Held-out MSE After", "Max Protected Change", "Status"],
-        ["0", "0.254999", "2.74e-10", "3.47e-17", "Verified"],
-        ["1", "0.291153", "3.13e-10", "2.78e-17", "Verified"],
-        ["2", "0.227038", "2.44e-10", "2.78e-17", "Verified"],
-        ["3", "0.413457", "4.44e-10", "9.02e-17", "Verified"],
-        ["4", "0.501408", "5.38e-10", "3.47e-17", "Verified"],
+        ["Seed", "Held-out MSE Before", "Held-out MSE After", "Max Protected Change", "Invariance Check"],
+        ["0", "0.254999", "2.74e-10", "3.47e-17", "Exact (AQ=0)"],
+        ["1", "0.291153", "3.13e-10", "2.78e-17", "Exact (AQ=0)"],
+        ["2", "0.227038", "2.44e-10", "2.78e-17", "Exact (AQ=0)"],
+        ["3", "0.413457", "4.44e-10", "9.02e-17", "Exact (AQ=0)"],
+        ["4", "0.501408", "5.38e-10", "3.47e-17", "Exact (AQ=0)"],
     ]
     t = Table(table_data, colWidths=[45, 125, 120, 130, 84])
     t.setStyle(TableStyle([
@@ -302,23 +291,19 @@ def build_pdf(output_path: str):
     ]))
     story.append(t)
     story.append(Spacer(1, 10))
-    story.append(Paragraph(
-        "In all seeds, base weights remained bit-identical, state_dict serialization roundtrips were exact, and protected "
-        "subspace error was bounded by floating-point noise (&le; 10<sup>-16</sup>).",
-        body_style
-    ))
     
     # Section 6
-    story.append(Paragraph("6. Conclusion & Availability", h1_style))
+    story.append(Paragraph("6. Production Integration Boundaries &amp; Conclusion", h1_style))
     story.append(Paragraph(
-        "Fast-weight plasticity provides a viable, computationally efficient mechanism for real-time model adaptation. "
-        "The complete PyTorch implementation, unit test suite, and interactive Transformer demonstration are released as open-source software "
-        "under the MIT License at: <code>https://github.com/nauheimervater/plastic-transformer</code>.",
+        "Integrating fast weights into production language models requires: (1) direct tensor contraction access rather than external API wrappers, "
+        "(2) KV-cache coherence management during autoregressive decoding, and (3) systematic derivation of intermediate layer target activations <i>T</i>. "
+        "The complete PyTorch implementation and unit test suite are released under the MIT License at: "
+        "<code>https://github.com/nauheimervater/plastic-transformer</code>.",
         body_style
     ))
     
     doc.build(story, canvasmaker=NumberedCanvas)
-    print(f"[PDF] Successfully compiled preprint to {output_path}")
+    print(f"[PDF] Successfully recompiled paper PDF to {output_path}")
 
 
 if __name__ == "__main__":

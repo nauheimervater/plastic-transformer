@@ -5,42 +5,49 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Paper: PDF](https://img.shields.io/badge/Paper-PDF-red.svg)](paper/Plasticity_Is_All_You_Need.pdf)
 
-> **"Plasticity Is All You Need? A Testable Proposal for Persistent Fast-Weight Adaptation"**  
-> *Author:* **Thomas Nauheimer** (nauheimer.t@gmail.com) — September 2026
+> **"Plasticity Is All You Need? A Testable Proposal for Persistent Fast-Weight Adaptation in Neural Architectures"**  
+> *Author:* **Thomas Nauheimer** (nauheimer.t@gmail.com) — September 2026  
+> *Status:* Research proposal with a minimal reproducible PyTorch implementation.
 
 ---
 
-## 📌 The Problem: Static Weights & Amnesia
+## 📌 Context: Static Weights vs. Test-Time Plasticity
 
-State-of-the-art Large Language Models (LLMs) suffer from a fundamental architectural limitation: **their weights are frozen after pretraining**. 
-- In-context learning (RAG, long context windows) is transient: once the context window is cleared, the model experiences **100% amnesia**.
-- Fine-tuning (SGD, LoRA) is offline, compute-heavy, and prone to **catastrophic forgetting**.
+Standard autoregressive language models operate with frozen parameters post-pretraining:
+- In-context memory (context window buffer) is transient: clearing the prompt resets state to baseline.
+- Traditional offline fine-tuning (SGD, full LoRA updates) is computationally heavy and risks catastrophic forgetting.
 
-## 💡 The Solution: Synaptic Fast-Weight Adaptation
+This repository implements a lightweight, low-rank fast-weight adapter (**`PlasticLinearProjected`**) that participates directly in tensor contractions during inference:
 
-**Plastic Transformer** provides dynamic, low-rank synaptic fast weights that participate directly in the forward pass during inference:
+$$W_{\text{eff}}(t) = W_{\text{slow}} + \gamma \cdot \left( U(t) V(t)^T \right)$$
 
-$$W_{\text{eff}}(t) = W_{\text{slow}} + \alpha \cdot \left( U(t) V(t)^T \right)$$
-
-- **$W_{\text{slow}}$**: Frozen foundational model weights (preserving base capabilities).
-- **$U(t) \in \mathbb{R}^{d_{\text{out}} \times r}, V(t) \in \mathbb{R}^{d_{\text{in}} \times r}$**: Dynamic low-rank fast weights ($r \ll d$).
-- **Runtime Adaptation**: Online Hebbian / Oja updates without global backpropagation.
-- **Subspace Invariance**: Orthogonal projection $P = I - Q Q^T$ guarantees that protected capabilities in $\text{span}(Q)$ suffer **strictly zero interference** ($\le 10^{-16}$).
+- **$W_{\text{slow}}$**: Frozen base parameter matrix ($\text{requires\_grad}=\text{False}$).
+- **$U(t) \in \mathbb{R}^{d_{\text{out}} \times r}, V(t) \in \mathbb{R}^{d_{\text{in}} \times r}$**: Dynamic low-rank factors ($r \ll d$).
+- **Subspace Invariance**: Right-projection $P = I - Q Q^T$ onto the orthogonal complement of protected feature basis $Q \in \mathbb{R}^{d_{\text{in}} \times k}$. For any input lying entirely in $\text{span}(Q)$, $A_t Q = 0$ holds algebraically by construction ($\le 10^{-16}$ numerical residual).
 
 ```mermaid
 flowchart LR
     X["Input x"] --> Slow["W_slow (Frozen Base)"]
     X --> Fast["(x · V) · U^T (Fast Weights)"]
     Slow --> Add((+))
-    Fast -->|"x alpha"| Add
+    Fast -->|"x gamma"| Add
     Add --> Y["Output y"]
     
-    Y -.->|"Online Hebbian / Oja Update"| Fast
+    Y -.->|"Projected Delta-Rule Update"| Fast
 
     style Slow fill:#2b2d42,color:#fff
     style Fast fill:#d90429,color:#fff
     style Add fill:#8d99ae,color:#fff
 ```
+
+---
+
+## 🔬 Relationship to Foundational Literature
+
+This work investigates the intersection of classical fast weights and modern continual learning:
+- **Fast Weights & Attention:** Ba et al. (2016); Schlag et al. (2021) demonstrated that linear transformers act as fast-weight programmers.
+- **Subspace Gradient Projection:** Orthogonal Weights Modification (OWM; Zeng et al., 2019) and Gradient Projection Memory (GPM; Saha et al., 2021) project parameter updates onto orthogonal complements to prevent catastrophic interference.
+- **Test-Time Training (TTT):** Sun et al. (2024) and Titans (Behrouz et al., 2024) explore inference-time inner-loop gradient adaptation.
 
 ---
 
@@ -54,69 +61,74 @@ cd plastic-transformer
 pip install -r requirements.txt
 ```
 
-### 2. Injecting Plasticity into any PyTorch Model
+### 2. Injecting Plasticity into PyTorch Models
 
 ```python
 import torch
 from plastic_transformer import PlasticModelWrapper
 
-# Wrap your existing PyTorch or HuggingFace Transformer
+# Wrap any PyTorch model (e.g. Llama/Qwen attention layers)
 model = YourPretrainedTransformer()
 plastic_model = PlasticModelWrapper(
     model, 
     target_modules=["q_proj", "v_proj", "o_proj"], 
     rank=8, 
-    eta=0.05
+    learning_rate=0.5,
+    layer_type="projected"
 )
 
-# Inference forward pass
+# Standard forward inference (read-only; weights are never modified during forward pass)
 out = plastic_model(input_tokens)
 
-# Adapt online during conversation (Hebbian synaptic step)
-plastic_model.step_plasticity(surprise_signal=1.0)
+# Explicit target-driven adaptation step on intermediate layer
+# layer.adapt(x_activations, target_activations)
 
-# Save lightweight episodic memory snapshot (< 5 MB)
-plastic_model.save_synaptic_memory("episodic_memory.pt")
+# Save lightweight fast-weight buffers (< 5 MB)
+plastic_model.save_synaptic_memory("episodic_snapshot.pt")
+
+# Restore exact base model behavior anytime by setting gate to 0.0
+plastic_model.set_gate(0.0)
 ```
 
 ---
 
-## 🔬 Experimental Verification
+## 🧪 Experimental Verification
 
-Run the included verification suite:
+Run the reproducible verification suite:
 
 ```bash
-# 1. Run all unit tests
+# 1. Run all unit tests (subspace invariance, dense reference, state roundtrip)
 python -m unittest discover -s tests
 
-# 2. Run interactive Llama/Qwen Transformer demo
-python examples/demo_transformer.py
-
-# 3. Run formal projected delta-rule regression benchmark
+# 2. Run formal projected delta-rule regression benchmark
 python examples/demo_projected_adaptation.py
+
+# 3. Run Llama-style decoder gate & serialization demo
+python examples/demo_transformer.py
 ```
 
 ### Measured Subspace Invariance Benchmark:
 
-| Seed | Held-out MSE Before | Held-out MSE After | Max Protected Change | Verification Status |
-|:---:|:---:|:---:|:---:|:---:|
-| **0** | 0.254999 | $2.74 \times 10^{-10}$ | $3.47 \times 10^{-17}$ | 🟢 Exact Invariance |
-| **1** | 0.291153 | $3.13 \times 10^{-10}$ | $2.78 \times 10^{-17}$ | 🟢 Exact Invariance |
-| **2** | 0.227038 | $2.44 \times 10^{-10}$ | $2.78 \times 10^{-17}$ | 🟢 Exact Invariance |
-| **3** | 0.413457 | $4.44 \times 10^{-10}$ | $9.02 \times 10^{-17}$ | 🟢 Exact Invariance |
-| **4** | 0.501408 | $5.38 \times 10^{-10}$ | $3.47 \times 10^{-17}$ | 🟢 Exact Invariance |
+Tested on CPU, float64, 32-to-16 projection, rank 8, 4 protected basis directions, 8 novel adaptation directions, 160 updates:
 
-*Base weights remain bit-identical across all trials.*
+| Seed | Held-out MSE Before | Held-out MSE After | Max Protected Change | Invariance Check |
+|:---:|:---:|:---:|:---:|:---:|
+| **0** | 0.254999 | $2.74 \times 10^{-10}$ | $3.47 \times 10^{-17}$ | Exact ($AQ=0$) |
+| **1** | 0.291153 | $3.13 \times 10^{-10}$ | $2.78 \times 10^{-17}$ | Exact ($AQ=0$) |
+| **2** | 0.227038 | $2.44 \times 10^{-10}$ | $2.78 \times 10^{-17}$ | Exact ($AQ=0$) |
+| **3** | 0.413457 | $4.44 \times 10^{-10}$ | $9.02 \times 10^{-17}$ | Exact ($AQ=0$) |
+| **4** | 0.501408 | $5.38 \times 10^{-10}$ | $3.47 \times 10^{-17}$ | Exact ($AQ=0$) |
+
+*Note on Subspace Coverage:* Invariance holds algebraically for inputs strictly in $\text{span}(Q)$. Inputs with components orthogonal to $\text{span}(Q)$ will undergo adaptation.
 
 ---
 
 ## 📄 Research Paper
 
-The formal research paper is available in the `paper/` directory:
-- Markdown draft: [`paper/Plasticity_Is_All_You_Need.md`](paper/Plasticity_Is_All_You_Need.md)
+- Preprint Markdown: [`paper/Plasticity_Is_All_You_Need.md`](paper/Plasticity_Is_All_You_Need.md)
 - Compiled publication PDF: [`paper/Plasticity_Is_All_You_Need.pdf`](paper/Plasticity_Is_All_You_Need.pdf)
 
-To recompile the PDF at any time:
+To recompile the PDF:
 ```bash
 python paper/generate_paper_pdf.py
 ```
@@ -124,8 +136,6 @@ python paper/generate_paper_pdf.py
 ---
 
 ## 📚 Citation
-
-If you use this work in your research, please cite:
 
 ```bibtex
 @misc{nauheimer2026plasticity,
