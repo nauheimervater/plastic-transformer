@@ -103,26 +103,11 @@ class PlasticModelWrapper(nn.Module):
     def forward(self, *args, **kwargs):
         return self.base_model(*args, **kwargs)
 
-    @torch.no_grad()
-    def calibrate_subspace(
+    def _collect_activations(
         self,
-        calibration_inputs: Union[torch.Tensor, List[Any]],
-        k: int = 8,
+        inputs: Union[torch.Tensor, List[Any]],
         max_samples: int = 1024
-    ) -> Dict[str, int]:
-        """
-        Calibrate the protected subspace span(Q) across all plastic layers by recording
-        layer-wise input activations across forward passes of calibration_inputs.
-        
-        For each layer with accumulated inputs X in R^(N x d_in), computes the top-k
-        singular vectors V_k (dominant input directions) and sets layer.set_protected_subspace(V_k).
-        
-        Subsequent adaptations in these layers will have zero interference (Delta W * Q = 0)
-        on any input aligned with these dominant calibration directions.
-        
-        Returns:
-            Dict mapping layer name to the effective rank of calibrated Q.
-        """
+    ) -> Dict[str, torch.Tensor]:
         layer_inputs: Dict[str, List[torch.Tensor]] = {name: [] for name in self.plastic_layer_map}
         hooks = []
         
@@ -138,12 +123,12 @@ class PlasticModelWrapper(nn.Module):
         was_training = self.training
         self.eval()
         try:
-            if isinstance(calibration_inputs, torch.Tensor):
-                items = [calibration_inputs]
-            elif isinstance(calibration_inputs, (list, tuple)):
-                items = list(calibration_inputs)
+            if isinstance(inputs, torch.Tensor):
+                items = [inputs]
+            elif isinstance(inputs, (list, tuple)):
+                items = list(inputs)
             else:
-                items = [calibration_inputs]
+                items = [inputs]
                 
             for item in items:
                 if isinstance(item, dict):
@@ -157,28 +142,121 @@ class PlasticModelWrapper(nn.Module):
                 h.remove()
             self.train(was_training)
             
-        results = {}
+        collected_tensors = {}
         for name, layer in self.plastic_layer_map.items():
-            collected = layer_inputs[name]
-            if not collected:
-                results[name] = 0
+            tensors = layer_inputs[name]
+            if not tensors:
                 continue
-            X = torch.cat(collected, dim=0)
+            X = torch.cat(tensors, dim=0)
             if X.shape[0] > max_samples:
-                X = X[:max_samples]
-            X = X.to(device=layer.base.weight.device, dtype=layer.base.weight.dtype)
+                # Random sampling rather than deterministic truncation
+                perm = torch.randperm(X.shape[0])[:max_samples]
+                X = X[perm]
+            collected_tensors[name] = X.to(
+                device=layer.base.weight.device, 
+                dtype=layer.base.weight.dtype
+            )
+        return collected_tensors
+
+    @torch.no_grad()
+    def calibrate_subspace(
+        self,
+        calibration_inputs: Union[torch.Tensor, List[Any]],
+        k: Optional[int] = 8,
+        energy_threshold: Optional[float] = None,
+        max_samples: int = 1024
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Calibrate the protected subspace span(Q) across all plastic layers by recording
+        layer-wise input activations across forward passes of calibration_inputs.
+        
+        Supports:
+        - Fixed dimension k (top-k singular vectors).
+        - Energy threshold (GPM style: cumulative variance sum(s_i^2)/sum(s^2) >= energy_threshold).
+        
+        Returns:
+            Dict mapping layer name to calibration metrics (rank, energy_explained).
+        """
+        collected = self._collect_activations(calibration_inputs, max_samples=max_samples)
+        results = {}
+        
+        for name, layer in self.plastic_layer_map.items():
+            if name not in collected:
+                results[name] = {"rank": 0, "energy_explained": 0.0}
+                continue
+            X = collected[name]
             
-            actual_k = min(k, X.shape[1], X.shape[0])
+            _, s, vh = torch.linalg.svd(X, full_matrices=False)
+            total_energy = (s ** 2).sum()
+            cum_energy = torch.cumsum(s ** 2, dim=0) / total_energy.clamp_min(1e-12)
+            
+            if energy_threshold is not None:
+                # GPM-style energy criterion
+                meets_thresh = (cum_energy >= energy_threshold).nonzero()
+                actual_k = meets_thresh[0].item() + 1 if len(meets_thresh) > 0 else len(s)
+                if k is not None:
+                    actual_k = min(actual_k, k)
+            else:
+                actual_k = min(k if k is not None else 8, X.shape[1], X.shape[0])
+                
+            actual_k = min(actual_k, vh.shape[0])
             if actual_k > 0:
-                _, _, vh = torch.linalg.svd(X, full_matrices=False)
-                # Leading k input directions are columns of vh[:k].T: shape (d_in, k)
                 basis = vh[:actual_k].T
                 layer.set_protected_subspace(basis)
-                results[name] = layer.Q.shape[1]
+                energy_exp = cum_energy[actual_k - 1].item()
+                results[name] = {"rank": actual_k, "energy_explained": energy_exp}
             else:
                 layer.set_protected_subspace(None)
-                results[name] = 0
+                results[name] = {"rank": 0, "energy_explained": 0.0}
                 
+        return results
+
+    @torch.no_grad()
+    def expand_subspace(
+        self,
+        new_inputs: Union[torch.Tensor, List[Any]],
+        k_max_new: int = 4,
+        energy_threshold: float = 0.95,
+        max_samples: int = 1024
+    ) -> Dict[str, int]:
+        """
+        Continual Learning: Sequentially expand existing protected subspace Q with
+        novel activation directions observed in new_inputs.
+        
+        Projects new activations onto the orthogonal complement (I - Q Q^T), extracts
+        dominant residual directions via SVD, and appends them to Q.
+        """
+        collected = self._collect_activations(new_inputs, max_samples=max_samples)
+        results = {}
+        
+        for name, layer in self.plastic_layer_map.items():
+            if name not in collected:
+                results[name] = layer.Q.shape[1]
+                continue
+            X = collected[name]
+            
+            if layer.Q.shape[1] == 0:
+                # No previous basis, calibrate directly
+                _, s, vh = torch.linalg.svd(X, full_matrices=False)
+                k_sel = min(k_max_new, vh.shape[0])
+                layer.set_protected_subspace(vh[:k_sel].T)
+                results[name] = layer.Q.shape[1]
+                continue
+                
+            # Project new activations onto orthogonal complement of existing Q
+            X_perp = layer.project(X)
+            residual_energy = (X_perp ** 2).sum() / (X ** 2).sum().clamp_min(1e-12)
+            
+            if residual_energy > 0.01: # Has significant new orthogonal energy
+                _, s_perp, vh_perp = torch.linalg.svd(X_perp, full_matrices=False)
+                k_new = min(k_max_new, vh_perp.shape[0])
+                new_dirs = vh_perp[:k_new].T
+                
+                # Combine and re-orthonormalize
+                combined = torch.cat([layer.Q, new_dirs], dim=1)
+                layer.set_protected_subspace(combined)
+                
+            results[name] = layer.Q.shape[1]
         return results
 
     def set_subspace(self, layer_name: str, basis: Optional[torch.Tensor]):

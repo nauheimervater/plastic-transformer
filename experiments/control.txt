@@ -1,0 +1,66 @@
+The water cycle describes how water evaporates, condenses into clouds and falls as rain across the Earth's surface.
+
+Paris is the capital of France and lies on the river Seine, known worldwide for its art, gastronomy, and cultural monuments.
+
+def add(a, b):
+    return a + b
+
+print(add(2, 3))
+
+Photosynthesis converts light energy into chemical energy stored in glucose, releasing oxygen into the atmosphere.
+
+Der Rhein fließt von den Alpen bis zur Nordsee und ist eine der wichtigsten Wasserstraßen und Handelsrouten in ganz Europa.
+
+The mitochondria is often called the powerhouse of the cell because it generates most of the chemical energy needed by the cell.
+
+In 1969, astronauts Neil Armstrong and Buzz Aldrin landed on the Moon for the first time during the Apollo 11 mission.
+
+A prime number has exactly two distinct divisors: one and itself. The sequence begins with two, three, five, seven, and eleven.
+
+The quick brown fox jumps over the lazy dog near the riverbank while the summer wind blows through the dense oak trees.
+
+Shakespeare wrote celebrated plays such as Hamlet, Macbeth, King Lear, and Romeo and Juliet in Elizabethan England.
+
+Newton's second law of motion states that force equals mass times acceleration, formalizing classical mechanics.
+
+Die Photosynthese findet in den Chloroplasten der Pflanzenzellen statt, wo Chlorophyll das Sonnenlicht absorbiert.
+
+SELECT name, age, department FROM users WHERE age > 30 ORDER BY name ASC;
+
+The Pacific Ocean is the largest and deepest ocean on Earth, covering more than thirty percent of the planet's total surface.
+
+Water boils at 100 degrees Celsius at standard sea level atmospheric pressure and freezes at zero degrees.
+
+A sonnet is a traditional poem of fourteen lines with a fixed rhyme scheme and a volta dividing octave and sestet.
+
+General relativity describes gravitation as a geometric property of spacetime curved by energy and momentum.
+
+Quantum electrodynamics explains how light and matter interact, achieving extraordinarily precise predictions in particle physics.
+
+Johannes Gutenberg invented movable type printing in Europe around 1440, revolutionizing the spread of human knowledge.
+
+The human genome contains approximately three billion base pairs of DNA packaged into twenty-three pairs of chromosomes.
+
+Machine learning models approximate high-dimensional continuous functions by minimizing empirical loss on training distributions.
+
+The Industrial Revolution began in Great Britain in the late eighteenth century, transforming agrarian societies into industrial ones.
+
+Ludwig van Beethoven composed nine symphonies, continuing to write masterworks even after completely losing his hearing.
+
+Thermodynamics is founded upon conservation of energy, the non-decrease of entropy, and the definition of absolute zero.
+
+The Great Barrier Reef off the coast of Australia is the largest coral reef system in the world, visible from space.
+
+Alan Turing introduced the theoretical concept of a universal computing machine in 1936, establishing foundational computer science.
+
+Albert Einstein formulated the special theory of relativity in 1905, establishing the equivalence of mass and energy through E equals mc squared.
+
+The speed of light in a vacuum is exactly 299,792,458 meters per second and serves as a fundamental physical constant.
+
+DNA replication is semiconservative, meaning each strand of the original double helix serves as a template for a newly synthesized strand.
+
+The Mediterranean Sea connects to the Atlantic Ocean through the narrow Strait of Gibraltar, bounded by Europe, Africa, and Asia.
+
+Euclidean geometry relies upon five foundational postulates, the fifth of which is the celebrated parallel postulate.
+
+CRISPR-Cas9 is a precise gene-editing technology adapted from a natural defense mechanism found in bacterial immune systems.

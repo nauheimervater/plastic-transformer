@@ -74,7 +74,11 @@ def run_benchmark():
     total_elapsed = time.perf_counter() - total_start
     print(f"\nAll 5 seeds verified successfully in {total_elapsed*1000:.1f} ms.")
     print("Base weights remained bit-identical. Protected subspace invariance holds to machine precision.")
+    print("Note: The 'Max Protected Change' column reflects numerical zero (<= 1e-15).")
+    print("      Exact residuals (~10^-17 to 10^-16) vary with platform BLAS/CPU floating-point implementations,")
+    print("      while MSE convergence values match across all environments.")
 
 
 if __name__ == "__main__":
     run_benchmark()
+

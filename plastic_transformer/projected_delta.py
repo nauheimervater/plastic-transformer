@@ -81,6 +81,10 @@ class PlasticLinearProjected(nn.Module):
         u, s, _ = torch.linalg.svd(basis, full_matrices=False)
         threshold = max(basis.shape) * torch.finfo(basis.dtype).eps * (s.max() if s.numel() else 0)
         self.Q = u[:, s > threshold]
+        
+        # Enforce AQ = 0 immediately on any pre-existing fast weights
+        if hasattr(self, 'V') and self.V.numel() > 0 and self.Q.shape[1] > 0:
+            self.V.copy_(self.project(self.V.T).T)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Read-only: inference forward pass never modifies weights

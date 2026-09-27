@@ -108,7 +108,43 @@ class TestPlasticModelWrapper(unittest.TestCase):
         out_gated = wrapper(test_in)
         torch.testing.assert_close(out_frozen, out_gated)
 
+    def test_post_adaptation_subspace_protection(self):
+        torch.manual_seed(99)
+        base = nn.Linear(16, 8, dtype=torch.float64)
+        adapter = PlasticLinearProjected(base, rank=4)
+        
+        # Adapt without Q first
+        x = torch.randn(5, 16, dtype=torch.float64)
+        target = torch.randn(5, 8, dtype=torch.float64)
+        adapter.adapt(x, target)
+        
+        # Now set Q post-adaptation
+        new_q, _ = torch.linalg.qr(torch.randn(16, 3, dtype=torch.float64))
+        adapter.set_protected_subspace(new_q)
+        
+        # Invariance AQ = 0 must hold immediately
+        fast_out = adapter.U @ (adapter.V.T @ new_q)
+        self.assertLess(fast_out.abs().max().item(), 1e-15)
+
+    def test_expand_subspace_continual(self):
+        torch.manual_seed(101)
+        base = nn.Sequential(nn.Linear(12, 12, dtype=torch.float64))
+        wrapper = PlasticModelWrapper(base, target_modules=["0"], rank=4)
+        
+        # Initial calibration
+        in1 = torch.randn(10, 12, dtype=torch.float64)
+        wrapper.calibrate_subspace(in1, k=2)
+        initial_dim = wrapper.plastic_layers[0].Q.shape[1]
+        self.assertEqual(initial_dim, 2)
+        
+        # Expand subspace with new task inputs
+        in2 = torch.randn(10, 12, dtype=torch.float64)
+        wrapper.expand_subspace(in2, k_max_new=2)
+        expanded_dim = wrapper.plastic_layers[0].Q.shape[1]
+        self.assertGreater(expanded_dim, initial_dim)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

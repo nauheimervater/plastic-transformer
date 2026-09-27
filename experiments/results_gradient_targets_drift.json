@@ -1,0 +1,177 @@
+{
+  "config": {
+    "model": "Qwen/Qwen2.5-0.5B",
+    "tiny": false,
+    "device": "cpu",
+    "targets": "down_proj",
+    "layers": "all",
+    "rank": 8,
+    "max_mass": 10.0,
+    "lr": 0.1,
+    "k_sweep": "0,16,64,256",
+    "n_facts": 12,
+    "sessions": 3,
+    "epochs": 10,
+    "seeds": "0",
+    "control_file": "experiments/control.txt",
+    "out": "results_gradient_targets_drift.json"
+  },
+  "runs": [
+    {
+      "k": 0,
+      "q_fraction_mean": 0.0,
+      "adapted": {
+        "recall": 0.25,
+        "recall_logprob": -2.2164116837084293,
+        "paraphrase": 0.16666666666666666,
+        "paraphrase_logprob": -2.531972529987494
+      },
+      "kl_calib": 0.009713797248843917,
+      "kl_heldout": 0.01162415879127914,
+      "ppl_heldout_base": 9.268169005593224,
+      "ppl_heldout_adapted": 9.462276607710066,
+      "retention": [
+        [
+          0.75
+        ],
+        [
+          0.25,
+          0.5
+        ],
+        [
+          0.0,
+          0.0,
+          0.75
+        ]
+      ],
+      "mass_mean": 0.1478837625709275,
+      "mass_capped_layers": 0,
+      "max_layer_interference": 0.0,
+      "learn_seconds": 44.13930100001744,
+      "seed": 0,
+      "base": {
+        "recall": 0.0,
+        "recall_logprob": -7.965948820114136,
+        "paraphrase": 0.0,
+        "paraphrase_logprob": -8.081903537114462
+      }
+    },
+    {
+      "k": 16,
+      "q_fraction_mean": 0.003289473684210526,
+      "adapted": {
+        "recall": 0.3333333333333333,
+        "recall_logprob": -2.430592297265927,
+        "paraphrase": 0.25,
+        "paraphrase_logprob": -2.4027011891206107
+      },
+      "kl_calib": 0.00042393090487002655,
+      "kl_heldout": 0.001190145805554643,
+      "ppl_heldout_base": 9.268169005593224,
+      "ppl_heldout_adapted": 9.277235882032272,
+      "retention": [
+        [
+          0.75
+        ],
+        [
+          0.25,
+          0.5
+        ],
+        [
+          0.25,
+          0.0,
+          0.75
+        ]
+      ],
+      "mass_mean": 0.1315894992227792,
+      "mass_capped_layers": 0,
+      "max_layer_interference": 4.030806355359573e-09,
+      "learn_seconds": 45.67440530000022,
+      "seed": 0,
+      "base": {
+        "recall": 0.0,
+        "recall_logprob": -7.965948820114136,
+        "paraphrase": 0.0,
+        "paraphrase_logprob": -8.081903537114462
+      }
+    },
+    {
+      "k": 64,
+      "q_fraction_mean": 0.013157894736842105,
+      "adapted": {
+        "recall": 0.25,
+        "recall_logprob": -2.2015112629160285,
+        "paraphrase": 0.16666666666666666,
+        "paraphrase_logprob": -2.51311627527078
+      },
+      "kl_calib": 0.00015120501956788072,
+      "kl_heldout": 0.0007397315069420697,
+      "ppl_heldout_base": 9.268169005593224,
+      "ppl_heldout_adapted": 9.290726322516344,
+      "retention": [
+        [
+          0.75
+        ],
+        [
+          0.0,
+          1.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.75
+        ]
+      ],
+      "mass_mean": 0.1273869894842695,
+      "mass_capped_layers": 0,
+      "max_layer_interference": 8.206083812467568e-09,
+      "learn_seconds": 45.6279738000012,
+      "seed": 0,
+      "base": {
+        "recall": 0.0,
+        "recall_logprob": -7.965948820114136,
+        "paraphrase": 0.0,
+        "paraphrase_logprob": -8.081903537114462
+      }
+    },
+    {
+      "k": 256,
+      "q_fraction_mean": 0.05263157894736842,
+      "adapted": {
+        "recall": 0.25,
+        "recall_logprob": -2.4623138792812824,
+        "paraphrase": 0.16666666666666666,
+        "paraphrase_logprob": -2.8608292937278748
+      },
+      "kl_calib": 1.612105078217375e-05,
+      "kl_heldout": 0.0008946137930177254,
+      "ppl_heldout_base": 9.268169005593224,
+      "ppl_heldout_adapted": 9.297483292644733,
+      "retention": [
+        [
+          0.75
+        ],
+        [
+          0.0,
+          1.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.75
+        ]
+      ],
+      "mass_mean": 0.14679508096257146,
+      "mass_capped_layers": 0,
+      "max_layer_interference": 2.12786268605214e-08,
+      "learn_seconds": 47.88506260002032,
+      "seed": 0,
+      "base": {
+        "recall": 0.0,
+        "recall_logprob": -7.965948820114136,
+        "paraphrase": 0.0,
+        "paraphrase_logprob": -8.081903537114462
+      }
+    }
+  ]
+}
