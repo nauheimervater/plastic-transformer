@@ -10,3 +10,7 @@ venv/
 .vscode/
 experiments/*claude*
 experiments/antwort_fuer_claude.md
+
+# experiment outputs written to the working directory
+results_gradient_targets_drift.json
+tuning_tmp_*.json

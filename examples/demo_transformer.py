@@ -1,24 +1,30 @@
 """
-Demo: Transformer Fast-Weight Adaptation & The Stability-Plasticity Trade-Off
+Demo: fast-weight learning, subspace protection and consolidation in a small Llama-style decoder.
 Author: Thomas Nauheimer (2026)
 
-Demonstrates:
-1. Llama/Qwen-style SwiGLU decoder architecture with injected fast weights.
-2. Layer-level algebraic invariance (Delta W * Q = 0) vs. multi-layer representation drift.
-3. Empirical sweep over subspace dimension k: Quantifying the stability-plasticity trade-off.
-4. Sequential continual learning via subspace expansion (expand_subspace).
-5. Gate-based base restoration (Gate = 0.0) and exact synaptic state serialization.
+A randomly initialised 2-layer SwiGLU decoder (14 plastic projections) learns character
+sequences through PlasticModelWrapper.gradient_step. Everything printed is measured; the demo
+makes no claim beyond this toy model.
+
+Part 1  Protected dimension k vs. drift on the calibration prompt and learning on a new prompt.
+Part 2  Two conflicting sessions: forgetting of session A with and without consolidate + expand.
+Part 3  gate = 0 restores the base model exactly; synaptic memory roundtrip.
 """
 
-import sys
 import os
+import sys
+import tempfile
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 from plastic_transformer import PlasticModelWrapper
+
+TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
 
 class LlamaStyleAttention(nn.Module):
@@ -90,147 +96,125 @@ class PlasticLlamaMini(nn.Module):
         return self.head(self.ln_f(h))
 
 
+
+def encode(text):
+    return torch.tensor([[ord(c) % 128 for c in text]], dtype=torch.long)
+
+
+def seq_loss(model, ids):
+    logits = model(ids)
+    return F.cross_entropy(logits[0, :-1], ids[0, 1:])
+
+
+def span_loss(model, ids, start, length):
+    """Cross-entropy on the tokens ids[start:start+length] only (e.g. the digits of a code)."""
+    logits = model(ids)
+    return F.cross_entropy(logits[0, start - 1:start + length - 1], ids[0, start:start + length]).item()
+
+
+@torch.no_grad()
+def kl_to(model, ids, ref_logits):
+    lp_ref = F.log_softmax(ref_logits[0], -1)
+    lp = F.log_softmax(model(ids)[0], -1)
+    return (lp_ref.exp() * (lp_ref - lp)).sum(-1).mean().item()
+
+
+def learn(plastic, ids, steps, lr):
+    for _ in range(steps):
+        with plastic.capture():
+            loss = seq_loss(plastic, ids)
+        plastic.gradient_step(loss, lr=lr)
+
+
+def fresh(ref):
+    model = PlasticLlamaMini()
+    model.load_state_dict(ref.state_dict())
+    model.eval()
+    return PlasticModelWrapper(model, target_modules=TARGETS, rank=8, max_mass=100.0)
+
+
 def main():
-    print("=" * 80)
-    print("  PLASTIC TRANSFORMER - CONTINUAL ADAPTATION & DRIFT DYNAMICS")
-    print("  Author: Thomas Nauheimer (2026)")
-    print("  Architecture: Llama/Qwen-style SwiGLU Decoder (d=64, 14 Plastic Projections)")
-    print("=" * 80)
-    
     torch.manual_seed(42)
-    
-    def encode(text):
-        return torch.tensor([[ord(c) % 128 for c in text]], dtype=torch.long)
-    
-    prompt_base = encode("PROMPT: Core factual baseline principles of quantum mechanics and relativity.")
-    prompt_novel = encode("PROMPT: Runtime session update introducing novel test-time associations.")
-    
-    # -------------------------------------------------------------------------
-    # PART 1: The Stability-Plasticity Empirical Sweep (Model Drift vs. k)
-    # -------------------------------------------------------------------------
-    print("\n[PART 1] EMPIRICAL SWEEP: Model Drift vs. Subspace Dimension k")
-    print("Investigating how protected subspace dimension k affects baseline retention vs novel learning.\n")
-    
-    # Measure frozen base outputs
-    ref_base_model = PlasticLlamaMini(vocab_size=128, d_model=64, intermediate_dim=128, n_layers=2)
-    ref_base_model.eval()
+    ref = PlasticLlamaMini().eval()
+    base_prompt = encode("Core baseline text about quantum mechanics and relativity.")
+    # B shares most of its prefix with A but continues differently, so learning B interferes with A
+    session_a = encode("The code of the north door is 4711, said Ilse.")
+    session_b = encode("The code of the south door is 9052, said Ilse.")
     with torch.no_grad():
-        out_orig_base = ref_base_model(prompt_base)
-        out_orig_novel = ref_base_model(prompt_novel)
-        
-    print("| Subspace Dim k | Base Prompt Drift | Novel Adaptation Shift | Max Layer Residual (AQ=0) |")
-    print("|:--------------:|:-----------------:|:----------------------:|:-------------------------:|")
-    
-    k_values = [2, 4, 8, 16, 32, 64]
-    for k_val in k_values:
-        torch.manual_seed(42)
-        model = PlasticLlamaMini(vocab_size=128, d_model=64, intermediate_dim=128, n_layers=2)
-        # Load identical weights
-        model.load_state_dict(ref_base_model.state_dict())
-        model.eval()
-        
-        plastic = PlasticModelWrapper(
-            model,
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-            rank=8,
-            learning_rate=0.5
-        )
-        
-        # Calibrate subspace on baseline prompt
-        plastic.calibrate_subspace([prompt_base], k=k_val)
-        
-        # Perform adaptation on orthogonal directions
+        ref_base_logits = ref(base_prompt)
+
+    print("=" * 78)
+    print(" Plastic Transformer demo (random 2-layer Llama-style decoder, 14 plastic layers)")
+    print("=" * 78)
+
+    # Part 1 ------------------------------------------------------------------------------
+    print("\n[Part 1] Protected dimension k (calibrated on the base prompt), then 30 learning steps on session A")
+    print("| k | KL on base prompt | loss on A before -> after |")
+    print("|---:|---:|---|")
+    rows = []
+    for k in [0, 2, 8, 32, 64]:
+        plastic = fresh(ref)
+        if k:
+            plastic.calibrate_subspace([base_prompt], k=k)
         with torch.no_grad():
-            for name, layer in plastic.plastic_layer_map.items():
-                P = torch.eye(layer.base.in_features, dtype=layer.base.weight.dtype) - layer.Q @ layer.Q.T
-                x_novel = (P @ torch.randn(layer.base.in_features, 4)).T
-                target = layer.base(x_novel) + 0.1 * torch.randn(4, layer.base.out_features)
-                layer.adapt(x_novel, target)
-                
-            drift_base = (plastic(prompt_base) - out_orig_base).abs().mean().item()
-            shift_novel = (plastic(prompt_novel) - out_orig_novel).abs().mean().item()
-            
-            # Check layer-level invariance
-            max_res = 0.0
-            for layer in plastic.plastic_layers:
-                if layer.Q.shape[1] > 0:
-                    res = (layer(layer.Q.T) - layer.base(layer.Q.T)).abs().max().item()
-                    max_res = max(max_res, res)
-                    
-        print(f"| k = {k_val:2d}         | {drift_base:17.6f} | {shift_novel:22.6f} | ${max_res:.2e}$                 |")
-        
-    print("\n[KEY THEORETICAL FINDING: Layer Invariance vs. End-to-End Model Drift]")
-    print("  1. LAYER-LEVEL INVARIANCE IS EXACT: Across all k, Delta W * Q = 0 holds to machine precision.")
-    print("  2. MULTI-LAYER DRIFT DYNAMICS: At small k (e.g. k=4), Q captures only a subset of activation energy.")
-    print("     Unprotected dimensions undergo adaptation. These perturbations compound through non-linearities,")
-    print("     causing downstream activations to drift outside downstream calibrated subspaces.")
-    print("  3. THE STABILITY-PLASTICITY TRADE-OFF: As k increases to span the full activation space (k=32),")
-    print("     Baseline Prompt Drift drops to EXACTLY 0.000000!")
-    print("     Concurrently, the available degrees of freedom for new adaptation shrink (from 0.052 to 0.012).")
-    
-    # -------------------------------------------------------------------------
-    # PART 2: Continual Learning via Subspace Expansion (expand_subspace)
-    # -------------------------------------------------------------------------
-    print("\n" + "-" * 80)
-    print("[PART 2] CONTINUAL LEARNING: Dynamic Subspace Expansion Across Sessions")
-    print("-" * 80)
-    
-    torch.manual_seed(42)
-    continual_model = PlasticLlamaMini(vocab_size=128, d_model=64, intermediate_dim=128, n_layers=2)
-    continual_model.load_state_dict(ref_base_model.state_dict())
-    continual_model.eval()
-    
-    plastic_continual = PlasticModelWrapper(continual_model, rank=8, learning_rate=0.5)
-    
-    # Session 1: Calibrate on Base Knowledge
-    plastic_continual.calibrate_subspace([prompt_base], k=8)
-    initial_k = plastic_continual.plastic_layers[0].Q.shape[1]
-    print(f"  -> Session 1 calibrated: layer Q dim = {initial_k}")
-    
-    # Session 2: Expand subspace with Session 2 activations
-    plastic_continual.expand_subspace([prompt_novel], k_max_new=4)
-    expanded_k = plastic_continual.plastic_layers[0].Q.shape[1]
-    print(f"  -> Session 2 expanded:   layer Q dim = {expanded_k} (accumulated historical basis)")
-    assert expanded_k > initial_k, "Subspace failed to expand across sessions"
-    
-    # -------------------------------------------------------------------------
-    # PART 3: Base Restoration (Gate = 0.0) & Serialization Roundtrip
-    # -------------------------------------------------------------------------
-    print("\n" + "-" * 80)
-    print("[PART 3] RELIABILITY: Gate = 0.0 Base Restoration & Synaptic Serialization")
-    print("-" * 80)
-    
-    # Gate = 0.0 test
-    plastic_continual.set_gate(0.0)
+            before = seq_loss(plastic, session_a).item()
+        learn(plastic, session_a, steps=30, lr=0.3)
+        with torch.no_grad():
+            after = seq_loss(plastic, session_a).item()
+        kl = kl_to(plastic, base_prompt, ref_base_logits)
+        kl = max(kl, 0.0)  # tiny negative values are float rounding
+        rows.append((k, kl, before - after))
+        print(f"| {k} | {kl:.2e} | {before:.3f} -> {after:.3f} |")
+    k0, kmax = rows[0], rows[-1]
+    drift_note = (f"falls by a factor {k0[1] / kmax[1]:.0f}" if kmax[1] > 1e-10 else "falls to float rounding level")
+    print(f"Measured: KL on the base prompt {drift_note} from k=0 to k={kmax[0]}; the loss reduction on A "
+          f"shrinks from {k0[2]:.3f} to {kmax[2]:.3f} (stability-plasticity trade-off).")
+    print("Note: k is capped per layer by the number of calibration tokens and d_in. Layer-level")
+    print("invariance is exact only for inputs inside span(Q); model-level drift is what is measured here.")
+
+    # Part 2 ------------------------------------------------------------------------------
+    print("\n[Part 2] Sequential sessions A then B (100 steps each); loss measured on the 4-digit codes only")
+    code_at = "The code of the north door is 4711, said Ilse.".index("4711")
+    part2 = {}
+    for mode in ["no protection", "consolidate + expand_subspace"]:
+        plastic = fresh(ref)
+        learn(plastic, session_a, steps=100, lr=3.0)
+        with torch.no_grad():
+            a_after_a = span_loss(plastic, session_a, code_at, 4)
+        if mode != "no protection":
+            plastic.expand_subspace([session_a], energy_threshold=0.99)
+        learn(plastic, session_b, steps=100, lr=3.0)
+        with torch.no_grad():
+            a_end = span_loss(plastic, session_a, code_at, 4)
+            b_end = span_loss(plastic, session_b, code_at, 4)
+        part2[mode] = (a_end - a_after_a, b_end)
+        print(f"  {mode:<31} code A after A = {a_after_a:.3f} | code A after B = {a_end:.3f} "
+              f"(forgetting {a_end - a_after_a:+.3f}) | code B = {b_end:.3f}")
+    dims = [l.Q.shape[1] for l in plastic.plastic_layers]
+    print(f"  dim(Q) per layer after expansion: min {min(dims)}, max {max(dims)}")
+    (f_un, b_un), (f_pr, b_pr) = part2["no protection"], part2["consolidate + expand_subspace"]
+    print(f"  Measured: forgetting of A {f_un:+.3f} -> {f_pr:+.3f}; loss on code B {b_un:.3f} -> {b_pr:.3f} "
+          f"({'less' if b_pr > b_un else 'no less'} learning of B, whose inputs overlap strongly with A).")
+
+    # Part 3 ------------------------------------------------------------------------------
+    print("\n[Part 3] gate = 0 and synaptic memory roundtrip")
+    plastic.set_gate(0.0)
     with torch.no_grad():
-        out_gated = plastic_continual(prompt_base)
-        gate_diff = (out_gated - out_orig_base).abs().max().item()
-    print(f"  -> Gate = 0.0 Restoration: Deviation from frozen base = {gate_diff:.10e}")
-    assert gate_diff < 1e-6, "Gate restoration failed"
-    print("  -> Gate = 0.0 Status: VERIFIED (Bit-identical base restored)")
-    
-    # Serialization roundtrip test
-    plastic_continual.set_gate(1.0)
-    snapshot_file = "continual_synapses.pt"
-    plastic_continual.save_synaptic_memory(snapshot_file)
+        gate_diff = (plastic(base_prompt) - ref_base_logits).abs().max().item()
+    plastic.set_gate(1.0)
+    print(f"  max |output(gate=0) - base output| = {gate_diff:.2e}")
+    path = os.path.join(tempfile.mkdtemp(), "synapses.pt")
+    plastic.save_synaptic_memory(path)
     with torch.no_grad():
-        out_before_reset = plastic_continual(prompt_novel)
-        
-    plastic_continual.reset_synapses()
-    plastic_continual.load_synaptic_memory(snapshot_file)
+        out = plastic(session_b)
+    plastic.reset_synapses()
+    plastic.load_synaptic_memory(path)
     with torch.no_grad():
-        out_reloaded = plastic_continual(prompt_novel)
-        reload_diff = (out_reloaded - out_before_reset).abs().max().item()
-    print(f"  -> Serialization Roundtrip: Reload deviation = {reload_diff:.10e}")
-    assert reload_diff < 1e-6, "Serialization roundtrip mismatch"
-    print("  -> Serialization Status: EXACT ROUNDTRIP VERIFIED")
-    
-    if os.path.exists(snapshot_file):
-        os.remove(snapshot_file)
-        
-    print("\n" + "=" * 80)
-    print("  COMPLETE DEMO FINISHED SUCCESSFULLY: All dynamics empirically demonstrated.")
-    print("=" * 80)
+        reload_diff = (plastic(session_b) - out).abs().max().item()
+    os.remove(path)
+    print(f"  max |output after reload - output before| = {reload_diff:.2e}")
+    print(f"  persistent state: {plastic.state_bytes() / 1e3:.1f} kB fast weights "
+          f"(+ {(plastic.state_bytes(include_q=True) - plastic.state_bytes()) / 1e3:.1f} kB Q)")
 
 
 if __name__ == "__main__":

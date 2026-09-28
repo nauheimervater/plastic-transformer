@@ -18,10 +18,10 @@ ROOT = Path(__file__).resolve().parent.parent
 # Sweeps: 5 values each
 PLASTIC_LRS = [0.03, 0.1, 0.3, 1.0, 3.0]
 LORA_LRS_ADAM = [1e-4, 3e-4, 1e-3, 3e-3, 1e-2]
-OLORA_LAMS = [0.1, 0.5, 2.0]
+OLORA_LAMS = [0.1, 0.5, 2.0, 8.0, 32.0]  # extended: lam=2.0 was best at the upper edge of the first grid
 
-MASTER_OUT = ROOT / "experiments" / "tuning_results.json"
-SUMMARY_MD = ROOT / "experiments" / "tuning_summary.md"
+MASTER_OUT = ROOT / "experiments" / "results" / "tuning_results.json"
+SUMMARY_MD = ROOT / "experiments" / "results" / "tuning_summary.md"
 
 
 def run_cmd(cmd):

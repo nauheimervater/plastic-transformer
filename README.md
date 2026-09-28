@@ -1,60 +1,33 @@
-# 🧬 Plastic Transformer: Persistent Fast-Weight Adaptation
+# Plastic Transformer: persistent low-rank fast weights with input-subspace protection
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch 2.0+](https://img.shields.io/badge/pytorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Paper: PDF](https://img.shields.io/badge/Paper-PDF-red.svg)](paper/Plasticity_Is_All_You_Need.pdf)
 
-> **"Plasticity Is All You Need? A Testable Proposal for Persistent Fast-Weight Adaptation in Neural Architectures"**  
-> *Author:* **Thomas Nauheimer** (nauheimer.t@gmail.com) — September 2026  
-> *Status:* Research proposal with a minimal reproducible PyTorch implementation.
+> **Plasticity Is All You Need? Persistent Low-Rank Fast Weights with Input-Subspace Protection**
+> Thomas Nauheimer (nauheimer.t@gmail.com), September 2026.
+> Status: work in progress. Exploratory results on one 0.5B model; the confirmatory comparison is pending.
 
----
+## What this is
 
-## 📌 Context: Static Weights vs. Test-Time Plasticity
+`PlasticLinearProjected` wraps a frozen `nn.Linear` with low-rank fast weights:
 
-Standard autoregressive language models operate with frozen parameters post-pretraining:
-- In-context memory (context window buffer) is transient: clearing the prompt resets state to baseline.
-- Traditional offline fine-tuning (SGD, full LoRA updates) is computationally heavy and risks catastrophic forgetting.
-
-This repository implements a lightweight, low-rank fast-weight adapter (**`PlasticLinearProjected`**) that participates directly in tensor contractions during inference:
-
-$$W_{\text{eff}}(t) = W_{\text{slow}} + \gamma \cdot \left( U(t) V(t)^T \right)$$
-
-- **$W_{\text{slow}}$**: Frozen base parameter matrix ($\text{requires\_grad}=\text{False}$).
-- **$U(t) \in \mathbb{R}^{d_{\text{out}} \times r}, V(t) \in \mathbb{R}^{d_{\text{in}} \times r}$**: Dynamic low-rank factors ($r \ll d$).
-- **Subspace Invariance**: Right-projection $P = I - Q Q^T$ onto the orthogonal complement of protected feature basis $Q \in \mathbb{R}^{d_{\text{in}} \times k}$. For any input lying entirely in $\text{span}(Q)$, $A_t Q = 0$ holds algebraically by construction ($\le 10^{-16}$ numerical residual).
-
-```mermaid
-flowchart LR
-    X["Input x"] --> Slow["W_slow (Frozen Base)"]
-    X --> Fast["(x · V) · U^T (Fast Weights)"]
-    Slow --> Add((+))
-    Fast -->|"x gamma"| Add
-    Add --> Y["Output y"]
-    
-    Y -.->|"Projected Delta-Rule Update"| Fast
-
-    style Slow fill:#2b2d42,color:#fff
-    style Fast fill:#d90429,color:#fff
-    style Add fill:#8d99ae,color:#fff
+```
+y = W x + b + γ · (A_frozen + A_active) x,    A = U Vᵀ
 ```
 
----
+- Updates of the active factors are right-projected by P = I − QQᵀ. Outputs for inputs **inside** span(Q) are therefore unchanged by adaptation (exact in exact arithmetic, ≤ 10⁻¹⁵ in float64). Inputs with components outside span(Q) are changed, and in a deep network those changes propagate. Layer invariance is not model invariance; model-level drift has to be measured.
+- Updates are compressed with thin QR plus a small core SVD: O((d_in + d_out)·m² + m³) per step with m = rank + batch size. The dense weight matrix is never formed.
+- `consolidate()` freezes the active factors into a store that later updates never touch. It is required before growing Q to protect something already learned; otherwise the projection erases it. `set_protected_subspace` refuses to run on nonzero active factors.
 
-## 🔬 Relationship to Foundational Literature
+In a language model, `PlasticModelWrapper.gradient_step` derives layer targets from the token loss, T = Y − lr · N / mean‖x‖² · ∂L/∂Y. Each step is then a projected, NLMS-normalized gradient step on the fast weights: **test-time training of a low-rank state with gradient projection (as in GPM)**. It needs a backward pass through the frozen model; it is not a forward-only update.
 
-This work investigates the intersection of classical fast weights and modern continual learning:
-- **Fast Weights & Attention:** Ba et al. (2016); Schlag et al. (2021) demonstrated that linear transformers act as fast-weight programmers.
-- **Subspace Gradient Projection:** Orthogonal Weights Modification (OWM; Zeng et al., 2019) and Gradient Projection Memory (GPM; Saha et al., 2021) project parameter updates onto orthogonal complements to prevent catastrophic interference.
-- **Parameter vs. Activation Orthogonality (O-LoRA):** Wang et al. (2023; O-LoRA) enforce parameter-space orthogonality across discrete sequential tasks. In contrast, our approach projects directly in activation space (onto the nullspace of historical activations) and operates continuously without discrete task boundaries.
-- **Test-Time Training (TTT):** Sun et al. (2024) and Titans (Behrouz et al., 2024) explore inference-time inner-loop gradient adaptation.
+## Relation to prior work
 
----
+Fast weights (Ba et al., 2016; Schlag et al., 2021); gradient projection onto the complement of earlier input activations (OWM, Zeng et al., 2019; GPM, Saha et al., 2021), which is what our update reduces to with gradient-derived targets; low-rank continual learning with session boundaries (O-LoRA, Wang et al., 2023; InfLoRA, Liang & Li, 2024, the closest prior work to our GPM-LoRA baseline); test-time training (Sun et al., 2024; Titans, Behrouz et al., 2024); massive activations (Sun et al., 2024). Like O-LoRA and InfLoRA, the continual procedure here uses session boundaries: consolidation and subspace growth happen between sessions.
 
-## 🚀 Quickstart
-
-### 1. Installation
+## Quickstart
 
 ```bash
 git clone https://github.com/nauheimervater/plastic-transformer.git
@@ -62,94 +35,80 @@ cd plastic-transformer
 pip install -r requirements.txt
 ```
 
-### 2. Injecting Plasticity and Subspace Calibration
-
 ```python
-import torch
+import torch.nn.functional as F
 from plastic_transformer import PlasticModelWrapper
 
-# Wrap any PyTorch model (e.g. Llama/Qwen attention and MLP layers)
-model = YourPretrainedTransformer()
-plastic_model = PlasticModelWrapper(
-    model, 
-    target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"], 
-    rank=8, 
-    learning_rate=0.5
-)
+# model: a float32 PyTorch model whose target layers are nn.Linear children with these exact names
+plastic = PlasticModelWrapper(model, target_modules=["down_proj"], rank=32, max_mass=1000.0)
 
-# Automated Subspace Calibration on baseline prompts (extracts protected span(Q)):
-plastic_model.calibrate_subspace(baseline_prompts, k=4)
+# optional: protect directions of generic activations (energy criterion, as in GPM)
+plastic.calibrate_subspace([control_ids_1, control_ids_2], energy_threshold=0.9)
 
-# Standard forward inference (read-only; forward evaluation never alters weights)
-out = plastic_model(input_tokens)
+# learn a session: gradient-derived targets, projected NLMS step on every plastic layer
+for ids, labels in session:
+    with plastic.capture():
+        logits = plastic(ids).logits
+        loss = F.cross_entropy(logits[0, :-1], labels[0, 1:], ignore_index=-100)
+    plastic.gradient_step(loss, lr=0.3)
 
-# Save lightweight fast-weight buffers (< 5 MB)
-plastic_model.save_synaptic_memory("episodic_snapshot.pt")
+# end of session: consolidate, then protect this session's inputs
+plastic.expand_subspace([ids for ids, _ in session], energy_threshold=0.97)
 
-# Restore exact base model behavior anytime by setting gate to 0.0
-plastic_model.set_gate(0.0)
+plastic.set_gate(0.0)                      # exact base model
+plastic.set_gate(1.0)
+plastic.save_synaptic_memory("memory.pt")  # active + consolidated factors and Q
+print(plastic.state_bytes() / 1e6, "MB")   # size grows with every session
 ```
 
----
+Restrictions: float32/float64 only (no bf16/fp16 or quantized layers); layers are matched by exact child name; the plain `adapt()` delta rule is stable only for learning_rate · λ_max(XᵀX/N) < 2, which is why `gradient_step` normalizes.
 
-## 🧪 Experimental Verification
-
-Run the reproducible verification suite:
+## Verification
 
 ```bash
-# 1. Run all unit tests (subspace invariance, calibration, dense reference, state roundtrip)
-python -m unittest discover -s tests
-
-# 2. Reproduce exact Table 1 multi-seed benchmark (seeds 0..4)
-python examples/reproduce_benchmark.py
-
-# 3. Run Llama-style decoder calibration & adaptation demo
-python examples/demo_transformer.py
+python -m unittest discover -s tests       # invariance, consolidation, safe Q growth, roundtrips, gradient step
+python examples/reproduce_benchmark.py      # synthetic invariance table (seeds 0..4)
+python examples/demo_transformer.py         # toy decoder: drift vs. k, forgetting with/without consolidation
 ```
 
-### Measured Subspace Invariance Benchmark:
+Synthetic benchmark (float64, 32 → 16, rank 8, 4 protected and 8 novel directions, 160 updates):
 
-Tested on CPU, float64, 32-to-16 projection, rank 8, 4 protected basis directions, 8 novel adaptation directions, 160 updates (run `python examples/reproduce_benchmark.py` to reproduce):
+| Seed | Held-out MSE before | after | Max change on span(Q) |
+|:---:|:---:|:---:|:---:|
+| 0 | 0.254999 | 2.74 × 10⁻¹⁰ | 4.2 × 10⁻¹⁷ |
+| 1 | 0.291153 | 3.13 × 10⁻¹⁰ | 4.2 × 10⁻¹⁷ |
+| 2 | 0.227038 | 2.44 × 10⁻¹⁰ | 5.6 × 10⁻¹⁷ |
+| 3 | 0.413457 | 4.44 × 10⁻¹⁰ | 5.9 × 10⁻¹⁷ |
+| 4 | 0.501408 | 5.38 × 10⁻¹⁰ | 5.6 × 10⁻¹⁷ |
 
-| Seed | Held-out MSE Before | Held-out MSE After | Max Protected Change | Invariance Check |
-|:---:|:---:|:---:|:---:|:---:|
-| **0** | 0.254999 | $2.74 \times 10^{-10}$ | $3.47 \times 10^{-17}$ | Exact ($AQ=0$) |
-| **1** | 0.291153 | $3.13 \times 10^{-10}$ | $2.78 \times 10^{-17}$ | Exact ($AQ=0$) |
-| **2** | 0.227038 | $2.44 \times 10^{-10}$ | $2.78 \times 10^{-17}$ | Exact ($AQ=0$) |
-| **3** | 0.413457 | $4.44 \times 10^{-10}$ | $9.02 \times 10^{-17}$ | Exact ($AQ=0$) |
-| **4** | 0.501408 | $5.38 \times 10^{-10}$ | $3.47 \times 10^{-17}$ | Exact ($AQ=0$) |
+The last column depends on the platform BLAS. This verifies the implementation, not usefulness.
 
-*Note on Subspace Coverage:* Invariance holds algebraically for inputs strictly in $\text{span}(Q)$. Inputs with components orthogonal to $\text{span}(Q)$ will undergo adaptation.
+## Language-model experiments
 
----
+`experiments/` contains the Qwen2.5-0.5B experiments (24 plastic `down_proj` layers, 48 fictional facts in 4 sessions) with LoRA, O-LoRA, GPM-LoRA, replay and retrieval baselines; see [experiments/README.md](experiments/README.md). Current state:
 
-## 📄 Research Paper
+- **Exploratory (seed 0):** forgetting across sessions is mainly interference; consolidation plus online growth of Q removes it in this setup (forget S1 2.8 → 0.0 nats). Most output drift runs along the mean activation direction.
+- **Tuning (seeds 100–102, best of five settings per method, optimistic):** our method reached recall 1.00 with forget S1 0.01; the strongest baseline, LoRA with replay, 0.92 and 0.01 with 1.75× the training passes and far higher drift.
+- **Pending:** confirmatory run on seeds 1–5 with fixed settings, retrieval baselines on Qwen, capacity over many sessions.
+- **Cost:** about 1.5 MB of fast weights per learned fact, plus about 2.9 MB per fact for Q if learning continues. Retrieval stores about 100 bytes per fact.
 
-- Preprint Markdown: [`paper/Plasticity_Is_All_You_Need.md`](paper/Plasticity_Is_All_You_Need.md)
-- Compiled publication PDF: [`paper/Plasticity_Is_All_You_Need.pdf`](paper/Plasticity_Is_All_You_Need.pdf)
+## Paper
 
-To recompile the PDF:
-```bash
-python paper/generate_paper_pdf.py
-```
+[`paper/Plasticity_Is_All_You_Need.md`](paper/Plasticity_Is_All_You_Need.md) is the source; the PDF is generated from it with `python paper/generate_paper_pdf.py` (requires `reportlab`).
 
----
-
-## 📚 Citation
+## Citation
 
 ```bibtex
 @misc{nauheimer2026plasticity,
   author       = {Thomas Nauheimer},
-  title        = {Plasticity Is All You Need? A Testable Proposal for Persistent Fast-Weight Adaptation in Neural Architectures},
+  title        = {Plasticity Is All You Need? Persistent Low-Rank Fast Weights with Input-Subspace Protection},
   year         = {2026},
   month        = {September},
   howpublished = {\url{https://github.com/nauheimervater/plastic-transformer}},
-  note         = {Preprint}
+  note         = {Preprint, work in progress}
 }
 ```
 
----
+## License
 
-## ⚖️ License
-
-Released under the **MIT License**. Copyright &copy; 2026 Thomas Nauheimer.
+MIT. Copyright © 2026 Thomas Nauheimer.

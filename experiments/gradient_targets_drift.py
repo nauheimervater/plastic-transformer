@@ -23,14 +23,13 @@ sense of GPM (Saha et al., 2021), applied to a low-rank inference-time state.
 
 Consolidation (required for online Q growth)
 --------------------------------------------
-PlasticLinearProjected.adapt() re-projects the *existing* factor V onto the complement of Q.
-If Q grows after something was learned, the next adapt() therefore erases the learned mapping
-on exactly the newly protected inputs (verified: one update with lr=1e-6 resets a learned fact).
-Rank truncation, decay and the mass cap would also alter A on span(Q).
-The experiment therefore consolidates at session end: the active factors (U, V) are frozen into a
-growing per-layer store, the active adapter is reset to zero, and only then Q is expanded. The
-active adapter satisfies A Q = 0 from its (zero) start, so later sessions cannot change the output
-of the frozen store on span(Q). The store grows by r columns per session and layer.
+Projecting existing fast weights onto the complement of a grown Q erases what they learned on
+exactly the newly protected inputs (verified: one further update with lr=1e-6 reset a learned fact
+in library version <= 1.0.4). Rank truncation, decay and the mass cap would also alter A on span(Q).
+Sessions therefore end with PlasticLinearProjected.consolidate(): the active factors are frozen into
+a per-layer store that later updates never touch, the active part restarts at zero, and only then
+Q is expanded. The store grows by r columns per session and layer. Since library version 1.1.0,
+set_protected_subspace() refuses to run on nonzero active factors.
 
 Conditions (--conditions, ';'-separated)
 ----------------------------------------
@@ -262,24 +261,10 @@ class PlasticSetup:
             adapter = PlasticLinearProjected(child, rank=rank, learning_rate=1.0, max_mass=max_mass)
             setattr(parent, child_name, adapter)
             self.adapters[full] = adapter
-        # consolidation store: frozen factors, added in a hook registered BEFORE the capture hook,
-        # so captured Y is the full layer output (required for correct gradients and errors)
-        self.store = {name: None for name in self.adapters}
-        for name, layer in self.adapters.items():
-            self.handles.append(layer.register_forward_hook(self._store_hook(name)))
         self.capture_on, self.X, self.Y = False, {}, {}
         for name, layer in self.adapters.items():
             self.handles.append(layer.register_forward_pre_hook(self._pre(name)))
             self.handles.append(layer.register_forward_hook(self._post(name)))
-
-    def _store_hook(self, name):
-        def hook(mod, inp, out):
-            st = self.store[name]
-            if st is None:
-                return None
-            u, v = st
-            return out + mod.gate * ((inp[0] @ v) @ u.T)
-        return hook
 
     def _pre(self, name):
         def hook(mod, inp):
@@ -301,22 +286,15 @@ class PlasticSetup:
             layer.gate.fill_(value)
 
     def reset(self):
-        for name, layer in self.adapters.items():
-            layer.reset()
+        for layer in self.adapters.values():
+            layer.reset()  # clears active and consolidated factors
             layer.set_protected_subspace(None)
-            self.store[name] = None
 
     @torch.no_grad()
     def consolidate(self):
-        """Freeze active factors into the store and reset the active adapter to zero."""
-        for name, layer in self.adapters.items():
-            u, v = layer.U.clone(), layer.V.clone()
-            if self.store[name] is not None:
-                u = torch.cat([self.store[name][0], u], dim=1)
-                v = torch.cat([self.store[name][1], v], dim=1)
-            self.store[name] = (u, v)
-            layer.U.zero_()
-            layer.V.zero_()
+        """Freeze active factors into each layer's consolidated store (PlasticLinearProjected.consolidate)."""
+        for layer in self.adapters.values():
+            layer.consolidate()
 
     def remove(self):
         for h in self.handles:
@@ -535,8 +513,7 @@ def run_condition(model, tok, setup, sessions, base_eval, cond, args, calib_X, c
         q_trace.append(q_fraction(setup))
 
     all_facts = [f for sess in sessions for f in sess]
-    state_numel = sum(l.U.numel() + l.V.numel() for l in setup.adapters.values())
-    state_numel += sum(u.numel() + v.numel() for u, v in (st for st in setup.store.values() if st is not None))
+    state_numel = sum(l.state_numel() for l in setup.adapters.values())
     final = eval_facts(model, tok, all_facts, args.device)
     para = eval_facts(model, tok, all_facts, args.device, paraphrase=True)
     d_cal = drift(model, tok, setup, calib_texts, args.device)

@@ -1,6 +1,8 @@
-# Runtime dependencies
+# Library
 torch>=2.0.0
-numpy>=1.24.0
 
-# Optional / Documentation PDF generation:
-# reportlab>=3.6.0
+# Experiments (experiments/)
+# transformers>=4.40
+
+# PDF generation (paper/generate_paper_pdf.py)
+# reportlab>=3.6

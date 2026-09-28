@@ -64,7 +64,7 @@ def run_benchmark():
             mse_after = ((model(hx) - hy) ** 2).mean().item()
             protected_delta = (model(q.T) - protected_before).abs().max().item()
             
-        check = "Exact ($AQ=0$)" if protected_delta < 1e-15 else "FAILED"
+        check = "≤ 1e-15" if protected_delta < 1e-15 else "FAILED"
         print(f"| {seed} | {mse_before:.6f} | ${mse_after:.2e}$ | ${protected_delta:.2e}$ | {check} |")
         
         # Rigorous assertions
