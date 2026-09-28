@@ -1,0 +1,111 @@
+{
+  "config": {
+    "model": "Qwen/Qwen2.5-0.5B",
+    "tiny": false,
+    "device": "cpu",
+    "targets": "down_proj",
+    "layers": "all",
+    "ranks": "32",
+    "max_mass": 1000.0,
+    "lr": 1.0,
+    "conditions": "online:eps=0.97:base_eps=0.9",
+    "lora_lr": 0.01,
+    "lora_opt": "sgd",
+    "n_facts": 48,
+    "sessions": 4,
+    "template_shift": true,
+    "epochs": 10,
+    "seeds": "100",
+    "control_file": "experiments/control.txt",
+    "out": "experiments/results/check_v111_seed100.json"
+  },
+  "runs": [
+    {
+      "condition": "online:eps=0.97:base_eps=0.9",
+      "recall": 1.0,
+      "recall_logprob": -0.010105029701662716,
+      "paraphrase": 0.8958333333333334,
+      "paraphrase_logprob": -0.17760611507704502,
+      "gain_first": 9.065020179317798,
+      "gain_last": 7.005271675414406,
+      "gains": [
+        9.065020179317798,
+        8.5815731047187,
+        8.709596363982808,
+        7.005271675414406
+      ],
+      "forget_first": 0.004779838345712051,
+      "retention_first_exact": 1.0,
+      "R_logprob": [
+        [
+          -0.0038639549748040736,
+          null,
+          null,
+          null
+        ],
+        [
+          -0.0074547080633540945,
+          -0.009974185765410462,
+          null,
+          null
+        ],
+        [
+          -0.008317622424025709,
+          -0.009929419223529598,
+          -0.01622187268609802,
+          null
+        ],
+        [
+          -0.008643793320516124,
+          -0.009808977949433029,
+          -0.01605584055262928,
+          -0.005911506984072427
+        ]
+      ],
+      "R_exact": [
+        [
+          1.0,
+          null,
+          null,
+          null
+        ],
+        [
+          1.0,
+          1.0,
+          null,
+          null
+        ],
+        [
+          1.0,
+          1.0,
+          1.0,
+          null
+        ],
+        [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      ],
+      "q_fraction_trace": [
+        0.0356273985745614,
+        0.04674650493421053,
+        0.05461896929824561,
+        0.060812431469298246,
+        0.060812431469298246
+      ],
+      "q_fraction": 0.060812431469298246,
+      "kl_calib": 0.00419489241305524,
+      "kl_heldout": 0.04412687273874675,
+      "ppl_base": 9.268169005593224,
+      "ppl_adapted": 9.552163486336614,
+      "active_mass_mean": 0.3631866850507019,
+      "learn_seconds": 215.41469449998112,
+      "state_mb_per_fact": 1.47456,
+      "train_passes": 480,
+      "rank": 32,
+      "seed": 100
+    }
+  ]
+}
