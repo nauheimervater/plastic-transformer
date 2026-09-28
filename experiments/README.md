@@ -1,4 +1,4 @@
-# Experiments 1+2: gradient targets, model-level drift, online subspace growth
+# Experiments 1–3: gradient targets, drift, online subspace growth, baselines
 
 `gradient_targets_drift.py` tests two questions:
 
@@ -37,8 +37,28 @@ growing Q in place.
 | `static:k=16:consol` | fixed Q plus consolidation (separates rank-truncation forgetting from interference) |
 | `online:eps=…:base_eps=0.9` | base Q by energy, then Q grows from session inputs |
 | `online:eps=0.97:nobase` | Q grows from session inputs only |
+| `lora:seq` | B1: one LoRA adapter across all sessions, no protection |
+| `lora:multi` | B2: new LoRA per session, old ones frozen (consolidation only) |
+| `lora:olora:lam=0.5` | B3: B2 + O-LoRA penalty λ Σ‖A_new A_oldᵀ‖²_F (parameter space) |
+| `lora:gpm:eps=0.97:base_eps=0.9` | B4: B2 + A ← A·P after every step, Q grown exactly as in `online:*` |
+| `lora:replay` | B5: B1 + one replayed earlier fact per step (counts as 2 passes) |
+| `rag:k=4` | B6: lexical top-k retrieval of learned facts into the prompt, frozen model |
+| `icl:all` | B6′: all learned facts in the prompt, frozen model |
 
 Diagnosis A (rank vs. interference): `--ranks 8,32,64`.
+LoRA baselines use the same modules, facts, sessions, epochs and per-session parameter
+budget r·(d_in + d_out) as the consolidated fast-weight store. Learning rate and optimizer:
+`--lora-lr`, `--lora-opt sgd|adam`. For B4, Adam is safe because the constraint is enforced
+on the parameter after each step; projecting only the gradient would not survive Adam's
+per-coordinate scaling (verified: |A Q| = 0.25 after 5 Adam steps, 8e-8 after A ← A·P).
+The O-LoRA penalty acts on the input-side factor A (r × d_in); the original paper states
+it on the factor spanning the update subspace. It is a constraint between parameter
+subspaces, not data activations, which is the point of comparing B3 with B4.
+
+Retrieval note: the fictional entity names are unique strings, so lexical retrieval is
+nearly perfect (paraphrase hit@4 = 1.00, top-1 = 0.98). B6 is therefore an upper bound
+for this data, not an estimate of retrieval quality in realistic settings. Its drift is
+measured as KL on control tokens with vs. without whatever the retriever returns for them.
 With `--template-shift` (default) the last session uses a different surface template,
 so a collapse of *gain last* can be attributed to shared-template protection.
 
@@ -52,6 +72,8 @@ so a collapse of *gain last* can be attributed to shared-template protection.
 | ret S1 exact | exact recall of session 1 at the end |
 | dim(Q)/d_in | protected fraction after the last session |
 | KL held-out, Δppl | model-level drift on held-out control texts |
+| state MB/fact | persistent state per fact (fp32 factors, Q excluded; B6: fact text) |
+| train passes | single-fact forward+backward passes during learning |
 
 The JSON output also contains the full retention matrices R[s][j] (logprob and exact)
 and the dim(Q) trace per session.
@@ -62,8 +84,8 @@ and the dim(Q) trace per session.
 pip install transformers
 
 # smoke test (random tiny Qwen2, byte tokenizer): validates the pipeline only
-python experiments/gradient_targets_drift.py --tiny --seeds 0 --n-facts 24 \
-    --targets q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj --max-mass 50
+python experiments/gradient_targets_drift.py --tiny --seeds 0,1 \
+    --targets q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj --epochs 15 --max-mass 50
 
 # stage 1: diagnoses A and B
 python experiments/gradient_targets_drift.py --model Qwen/Qwen2.5-0.5B --targets down_proj \
@@ -74,6 +96,14 @@ python experiments/gradient_targets_drift.py --model Qwen/Qwen2.5-0.5B --targets
 python experiments/gradient_targets_drift.py --model Qwen/Qwen2.5-0.5B --targets down_proj \
     --ranks 8 --control-file control.txt \
     --conditions "static:k=16:consol;online:eps=0.90:base_eps=0.9;online:eps=0.97:base_eps=0.9;online:eps=0.99:base_eps=0.9;online:eps=0.97:nobase"
+
+# stage 3: baselines (tune --lora-lr per method on seeds 100-102 first, then fix)
+python experiments/gradient_targets_drift.py --model Qwen/Qwen2.5-0.5B --targets down_proj \
+    --ranks 32 --control-file control.txt --seeds 100,101,102 --lora-lr 1e-3 \
+    --conditions "lora:seq;lora:multi;lora:olora:lam=0.5;lora:gpm:eps=0.97:base_eps=0.9;lora:replay"
+python experiments/gradient_targets_drift.py --model Qwen/Qwen2.5-0.5B --targets down_proj \
+    --ranks 32 --control-file control.txt --seeds 0,1,2,3,4 --lora-lr <tuned> \
+    --conditions "online:eps=0.97:base_eps=0.9;lora:seq;lora:multi;lora:olora:lam=0.5;lora:gpm:eps=0.97:base_eps=0.9;lora:replay;rag:k=4;icl:all"
 ```
 
 `control.txt`: blank-line-separated text blocks (a few hundred WikiText paragraphs).
