@@ -8,3 +8,5 @@ env/
 venv/
 .idea/
 .vscode/
+experiments/*claude*
+experiments/antwort_fuer_claude.md
