@@ -14,8 +14,8 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import (ListFlowable, ListItem, Paragraph, Preformatted, SimpleDocTemplate,
-                                Spacer, Table, TableStyle)
+from reportlab.platypus import (ListFlowable, ListItem, Paragraph, SimpleDocTemplate, Spacer, Table,
+                                TableStyle, XPreformatted)
 
 HERE = Path(__file__).resolve().parent
 SRC = HERE / "Plasticity_Is_All_You_Need.md"
@@ -34,6 +34,16 @@ FONT_CANDIDATES = [
 ]
 
 
+# Fallback for math symbols missing in the body font (e.g. Segoe UI lacks ∈, ℝ, ∝).
+SYMBOL_CANDIDATES = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/Library/Fonts/DejaVuSans.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+    "C:/Windows/Fonts/DejaVuSans.ttf",
+    "C:/Windows/Fonts/seguisym.ttf",
+]
+
+
 def register_fonts():
     for regular, bold, italic, mono in FONT_CANDIDATES:
         if all(Path(p).exists() for p in (regular, bold, italic, mono)):
@@ -48,7 +58,39 @@ def register_fonts():
     return "Helvetica", "Courier"
 
 
+def register_symbol_font():
+    for path in SYMBOL_CANDIDATES:
+        if Path(path).exists():
+            pdfmetrics.registerFont(TTFont("Sym", path))
+            return "Sym"
+    return None
+
+
+def glyphs(font_name):
+    font = pdfmetrics.getFont(font_name)
+    if not (hasattr(font, "face") and hasattr(font.face, "charToGlyph")):
+        return None
+    return {c for c, g in font.face.charToGlyph.items() if g}  # glyph 0 is .notdef (a box)
+
+
 BODY, MONO = register_fonts()
+SYM = register_symbol_font()
+COVERAGE = {name: glyphs(name) for name in (BODY, MONO)}
+SYM_COVERAGE = glyphs(SYM) if SYM else set()
+
+
+def with_fallback(text, font):
+    """Wrap characters the given font cannot render in the symbol font (text must already be escaped)."""
+    have = COVERAGE.get(font)
+    if not SYM or have is None:
+        return text
+    out = []
+    for ch in text:
+        if ord(ch) > 127 and ord(ch) not in have and ord(ch) in SYM_COVERAGE:
+            out.append(f'<font name="{SYM}">{ch}</font>')
+        else:
+            out.append(ch)
+    return "".join(out)
 S = {
     "title": ParagraphStyle("title", fontName=BODY, fontSize=17, leading=21, spaceAfter=6, alignment=1),
     "meta": ParagraphStyle("meta", fontName=BODY, fontSize=9.5, leading=13, spaceAfter=10, alignment=1,
@@ -64,12 +106,21 @@ S = {
 }
 
 
+def escape(text):
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def inline(text):
-    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    text = re.sub(r"`([^`]+)`", rf'<font name="{MONO}">\1</font>', text)
-    text = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", text)
-    text = re.sub(r"(?<![\w*])\*([^*]+)\*(?![\w*])", r"<i>\1</i>", text)
-    return text
+    parts = re.split(r"(`[^`]+`)", escape(text))
+    rendered = []
+    for part in parts:
+        if part.startswith("`") and part.endswith("`") and len(part) > 1:
+            rendered.append(f'<font name="{MONO}">{with_fallback(part[1:-1], MONO)}</font>')
+        else:
+            part = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", part)
+            part = re.sub(r"(?<![\w*])\*([^*]+)\*(?![\w*])", r"<i>\1</i>", part)
+            rendered.append(with_fallback(part, BODY))
+    return "".join(rendered)
 
 
 def table(rows):
@@ -109,7 +160,7 @@ def build_story(md):
             while i < len(lines) and not lines[i].startswith("```"):
                 block.append(lines[i])
                 i += 1
-            story.append(Preformatted("\n".join(block), S["code"]))
+            story.append(XPreformatted(with_fallback(escape("\n".join(block)), MONO), S["code"]))
         elif line.startswith("# "):
             flush()
             story.append(Paragraph(inline(line[2:]), S["title"]))
