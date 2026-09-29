@@ -128,6 +128,12 @@ All runs: Qwen2.5-0.5B, float32, `down_proj` in all 24 layers (d_in = 4864), 48 
 | `exp1_ksweep_12facts_seed0.json` | first run of the original script version (12 facts, 3 sessions, k-sweep) |
 | `stage2_online_q_seed0.json` | Stage 2, seed 0 |
 | `tuning_results.json`, `tuning_summary.md` | tuning on seeds 100–102, all methods (produced by `run_tuning.py`) |
+| `check_v111_seed100.json` | plausibility check: library 1.1.1 reproduces the tuning result (seed 100, lr = 1.0) |
+| `confirm_*.json` | confirmatory evaluation on seeds 1–5 (produced by `run_confirmation.py`) |
+| `explore_gpm_lora_sgd.json` | GPM-LoRA with SGD on seeds 1–5 (exploratory; the SGD tuning files are not committed) |
+| `drift_mechanics_results.json` | layer diagnostics and protection controls (produced by `analyze_drift_mechanics.py`) |
+
+`python experiments/summarize_results.py` prints all tables below from these files.
 
 The Stage 1 raw JSON was not committed; its numbers below are taken from the console output.
 
@@ -197,24 +203,55 @@ settings per method; the selected rows are therefore optimistic maxima.
 | lora:gpm | 3e-4 | 0.83 | 0.71 | 1.33 | 0.47 | 4.1e-02 | +0.43 | 1.47 | 480 |
 | lora:replay | 3e-4 | 0.92 | 0.84 | 0.01 | 0.97 | 6.3e-01 | +6.7 | 0.37 | 840 |
 
-Issues to address before or in the confirmatory run:
-- λ = 2.0 was the upper edge of the O-LoRA grid; `run_tuning.py` now sweeps {0.1, 0.5, 2, 8, 32}.
-- Our selected lr = 1.0 drifts 5.7× more than lr = 0.3 (KL 7.7e-03, Δppl +0.07) at nearly
-  identical recall (0.99). This is a consequence of selecting on recall alone; report both.
-- All LoRA variants drift strongly (KL ≈ 0.6–0.8) even at the smallest learning rate tried.
-- GPM-LoRA uses the same Q construction and guarantee as our method yet forgets more (1.33 nats).
-  Hypothesis: Adam's per-coordinate scaling amplifies updates along the ~3 % of session energy
-  that eps = 0.97 leaves unprotected. Testable with SGD for B4.
-- MB/fact excludes Q (about 2.9 MB per fact for our method and B4 here), which is needed only to
-  continue learning. Retrieval stores about 100 bytes per fact.
-- Retrieval and in-context baselines have not yet been run on Qwen.
+Notes on the tuning:
+- λ was at the upper edge of the O-LoRA grid twice (2.0, then 512 after one extension); as decided in
+  advance, the grid was extended once and the winner fixed.
+- For our method, lr = 1.0 drifted 5.7× more than lr = 0.3 at nearly identical recall, and lr = 3.0
+  diverged. lr = 0.3 was therefore announced as a sensitivity analysis before the confirmatory run.
 
-### Drift mechanism (seeds 0–2, 12 facts; analysis script not yet in the repository)
+### Confirmatory evaluation (seeds 1–5)
 
-KL reduction on held-out text relative to no protection: Q = x̄/‖x̄‖ 50 %, Q = v₁ 33 %,
-v₁ without its five largest channels 34 %, five largest channels as coordinate directions 20 %,
-five median channels 10 %, five random channels −10 %. The two controls indicate noise of about
-±10 %: the mean direction is clearly the larger lever; the channel-specific effect is suggestive,
-not established. In the middle layers ‖x̄‖² exceeds the largest covariance eigenvalue by
-1.2–1.8× and |cos(v₁, x̄)| ≥ 0.93; in layers 0 and 23 v₁ concentrates on a few channels with
-magnitudes up to 146× the median.
+Mean ± 95 % CI (t-distribution, n = 5). Seeds 1–5 were not used for any selection.
+
+| Method | Recall | Paraphrase | Forget S1 (nats) | Ret. S1 | KL held-out | Δppl | MB/fact | Passes |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Ours, lr = 1.0 (selected by protocol) | 0.89 ± 0.26 | 0.75 ± 0.44 | 0.22 ± 0.40 | 0.78 ± 0.43 | 0.918 ± 2.405 | +201 ± 558 | 1.47 | 480 |
+| Ours, lr = 0.3 (pre-announced sensitivity) | 0.96 ± 0.02 | 0.78 ± 0.07 | 0.05 ± 0.04 | 0.95 ± 0.06 | 0.010 ± 0.002 | +0.10 ± 0.09 | 1.47 | 480 |
+| B5 LoRA + replay | 0.95 ± 0.05 | 0.90 ± 0.03 | 0.11 ± 0.16 | 0.93 ± 0.09 | 0.612 ± 0.069 | +6.51 ± 1.33 | 0.37 | 840 |
+| B4 GPM-LoRA (Adam) | 0.85 ± 0.11 | 0.78 ± 0.10 | 1.05 ± 0.67 | 0.55 ± 0.32 | 0.049 ± 0.010 | +0.45 ± 0.29 | 1.47 | 480 |
+| B3 O-LoRA (λ = 512) | 0.58 ± 0.10 | 0.35 ± 0.16 | 1.77 ± 0.80 | 0.27 ± 0.15 | 1.157 ± 0.267 | +18.7 ± 8.3 | 1.47 | 480 |
+| B2 LoRA per session, frozen | 0.47 ± 0.09 | 0.45 ± 0.05 | 3.82 ± 1.47 | 0.02 ± 0.05 | 0.845 ± 0.169 | +10.5 ± 3.1 | 1.47 | 480 |
+| B1 sequential LoRA | 0.43 ± 0.04 | 0.41 ± 0.06 | 3.57 ± 0.89 | 0.02 ± 0.05 | 0.607 ± 0.095 | +7.47 ± 3.04 | 0.37 | 480 |
+| B6 retrieval, top-4 | 1.00 ± 0.00 | 0.97 ± 0.01 | 0.03 ± 0.02 | 1.00 ± 0.00 | 0.032 ± 0.002 | +0.11 ± 0.08 | 0.0001 | 0 |
+| B6′ all facts in context | 0.82 ± 0.07 | 0.71 ± 0.08 | 0.14 ± 0.07 | 0.88 ± 0.21 | 0.345 ± 0.015 | +0.78 ± 0.12 | 0.0001 | 0 |
+| B4 GPM-LoRA (SGD, exploratory) | 0.65 ± 0.10 | 0.50 ± 0.07 | 1.58 ± 0.55 | 0.28 ± 0.19 | 0.346 ± 0.185 | +3.43 ± 2.19 | 1.47 | 480 |
+
+Reading:
+- **The protocol-selected lr = 1.0 diverged on seed 4** (recall 0.52, KL 4.38, Δppl +1006); the other
+  four seeds are unremarkable. This is the primary result for that setting and is reported as such.
+- **lr = 0.3 is stable** and has the lowest drift of all methods. Among parametric methods only replay
+  matches its recall and retention; replay generalizes better to paraphrases (0.90 vs. 0.78) but drifts
+  60× more and needs 1.75× the passes.
+- **Retrieval is at least as good on every learning metric** at negligible cost. Entity names are unique
+  strings, so lexical retrieval is nearly perfect on this benchmark; B6 is an upper bound here.
+- **The Adam hypothesis for GPM-LoRA is refuted:** with SGD it learns less and forgets more.
+- MB/fact excludes Q (about 2.9 MB per fact for ours and B4), which is needed only to continue learning.
+
+### Drift mechanism (seeds 0–2, 12 facts, `analyze_drift_mechanics.py`)
+
+KL reduction on held-out text relative to no protection, paired per seed:
+
+| Protected basis per layer | Per-seed (%) | Mean ± 95 % CI (%) |
+|---|---|---:|
+| mean direction x̄/‖x̄‖ | 58, 44, 42 | 48 ± 22 |
+| v₁ with its five largest channels removed | 43, 28, 27 | 33 ± 23 |
+| v₁ (uncentered SVD) | 43, −1, 39 | 27 ± 60 |
+| five largest channels | 37, −2, 13 | 16 ± 50 |
+| five median channels | 19, 3, 4 | 9 ± 22 |
+| five random channels | 2, −40, −1 | −13 ± 57 |
+
+Only the mean direction helps consistently on all seeds; a channel-specific effect is not established.
+Layer structure: in layers 4, 6–20, 22 and 23, ‖x̄‖²/λ₁ = 1.0–2.4, |cos(v₁, x̄)| = 0.90–0.99 and v₁ is
+spread over tens to hundreds of channels; in layers 2, 3, 5 and 21, v₁ is essentially one channel
+(participation ratio 1.0–1.7), consistent with massive activations. Values in earlier versions of this
+README and the paper (v₁ = 33 %, per-layer statements for layers 0 and 23) are superseded by this file.

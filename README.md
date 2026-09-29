@@ -7,7 +7,7 @@
 
 > **Plasticity Is All You Need? Persistent Low-Rank Fast Weights with Input-Subspace Protection**
 > Thomas Nauheimer (nauheimer.t@gmail.com), September 2026.
-> Status: work in progress. Exploratory results on one 0.5B model; the confirmatory comparison is pending.
+> Status: research prototype. One 0.5B model, one synthetic benchmark, confirmatory evaluation over five seeds.
 
 ## What this is
 
@@ -85,12 +85,21 @@ The last column depends on the platform BLAS. This verifies the implementation, 
 
 ## Language-model experiments
 
-`experiments/` contains the Qwen2.5-0.5B experiments (24 plastic `down_proj` layers, 48 fictional facts in 4 sessions) with LoRA, O-LoRA, GPM-LoRA, replay and retrieval baselines; see [experiments/README.md](experiments/README.md). Current state:
+`experiments/` contains the Qwen2.5-0.5B experiments (24 plastic `down_proj` layers, 48 fictional facts in 4 sessions) with LoRA, O-LoRA, GPM-LoRA, replay and retrieval baselines; see [experiments/README.md](experiments/README.md). Confirmatory evaluation on five held-out seeds (mean ± 95 % CI):
 
-- **Exploratory (seed 0):** forgetting across sessions is mainly interference; consolidation plus online growth of Q removes it in this setup (forget S1 2.8 → 0.0 nats). Most output drift runs along the mean activation direction.
-- **Tuning (seeds 100–102, best of five settings per method, optimistic):** our method reached recall 1.00 with forget S1 0.01; the strongest baseline, LoRA with replay, 0.92 and 0.01 with 1.75× the training passes and far higher drift.
-- **Pending:** confirmatory run on seeds 1–5 with fixed settings, retrieval baselines on Qwen, capacity over many sessions.
-- **Cost:** about 1.5 MB of fast weights per learned fact, plus about 2.9 MB per fact for Q if learning continues. Retrieval stores about 100 bytes per fact.
+| Method | Recall | Paraphrase | Forget S1 (nats) | KL held-out | MB/fact | Passes |
+|---|---:|---:|---:|---:|---:|---:|
+| Ours, lr = 1.0 (selected by protocol) | 0.89 ± 0.26 | 0.75 ± 0.44 | 0.22 ± 0.40 | 0.92 ± 2.41 | 1.47 | 480 |
+| Ours, lr = 0.3 (pre-announced sensitivity) | 0.96 ± 0.02 | 0.78 ± 0.07 | 0.05 ± 0.04 | 0.010 ± 0.002 | 1.47 | 480 |
+| LoRA + replay | 0.95 ± 0.05 | 0.90 ± 0.03 | 0.11 ± 0.16 | 0.61 ± 0.07 | 0.37 | 840 |
+| GPM-LoRA | 0.85 ± 0.11 | 0.78 ± 0.10 | 1.05 ± 0.67 | 0.049 ± 0.010 | 1.47 | 480 |
+| Sequential LoRA | 0.43 ± 0.04 | 0.41 ± 0.06 | 3.57 ± 0.89 | 0.61 ± 0.10 | 0.37 | 480 |
+| Retrieval (top-4) | 1.00 ± 0.00 | 0.97 ± 0.01 | 0.03 ± 0.02 | 0.032 ± 0.002 | 0.0001 | 0 |
+
+- The protocol-selected learning rate diverged on one of five seeds; lr = 0.3 is stable.
+- At lr = 0.3 the method is the best trade-off between retention and drift among the parametric methods tested, with the lowest drift of all methods.
+- **Retrieval is at least as good on this benchmark at a tiny fraction of the cost.** The unique fictional names make retrieval unusually easy here; a harder benchmark is the next step.
+- Most unprotected drift runs along the mean input activation.
 
 ## Paper
 
