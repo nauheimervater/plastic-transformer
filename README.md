@@ -7,7 +7,15 @@
 
 > **Plasticity Is All You Need? Persistent Low-Rank Fast Weights with Input-Subspace Protection**
 > Thomas Nauheimer (nauheimer.t@gmail.com), September 2026.
-> Status: research prototype. One 0.5B model, one synthetic benchmark, confirmatory evaluation over five seeds.
+> Paper: [Zenodo, doi:10.5281/zenodo.23001193](https://doi.org/10.5281/zenodo.23001193) (use the latest version of the record).
+
+> **Project concluded (September 2026). No further development is planned.**
+>
+> **Result.** On the benchmark studied here (Qwen2.5-0.5B, 48 fictional facts in 4 sessions, confirmed on 5 held-out seeds), retrieving the stored facts into the prompt is at least as good as persistent fast weights at a small fraction of the cost. Among the parametric methods tested, the method gives the best trade-off between retention and drift; its protocol-selected learning rate diverged on one of five seeds, a pre-announced lower rate was stable.
+>
+> **Transferable findings.** (1) Growing a protected input subspace without first consolidating the fast weights erases exactly what was learned. (2) Output drift of unprotected updates runs mainly along the mean input activation of each layer. (3) The forgetting of GPM-LoRA is not caused by the optimizer (Adam vs. SGD).
+>
+> **Open question worth pursuing elsewhere.** Whether parametric consolidation adds anything to retrieval on tasks where retrieval fails structurally: two-hop questions across sessions, reversal questions, implicit use of facts.
 
 ## What this is
 
@@ -113,8 +121,10 @@ The last column depends on the platform BLAS. This verifies the implementation, 
   title        = {Plasticity Is All You Need? Persistent Low-Rank Fast Weights with Input-Subspace Protection},
   year         = {2026},
   month        = {September},
-  howpublished = {\url{https://github.com/nauheimervater/plastic-transformer}},
-  note         = {Preprint, work in progress}
+  publisher    = {Zenodo},
+  doi          = {10.5281/zenodo.23001193},
+  url          = {https://github.com/nauheimervater/plastic-transformer},
+  note         = {Preprint; project concluded}
 }
 ```
 
